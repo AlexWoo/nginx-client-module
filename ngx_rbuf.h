@@ -3,8 +3,8 @@
  */
 
 
-#ifndef _NGX_EVENT_TIMER_MODULE_H_INCLUDED_
-#define _NGX_EVENT_TIMER_MODULE_H_INCLUDED_
+#ifndef _NGX_RBUF_H_INCLUDED_
+#define _NGX_RBUF_H_INCLUDED_
 
 
 #include <ngx_config.h>
