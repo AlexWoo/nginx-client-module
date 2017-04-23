@@ -161,7 +161,7 @@ ngx_rbuf_free(u_char *rb)
 
 
 ngx_chain_t *
-ngx_get_chainbuf(size_t size)
+ngx_get_chainbuf(size_t size, ngx_flag_t rbuf)
 {
     ngx_chain_t                *cl;
     u_char                     *p;
@@ -186,14 +186,19 @@ ngx_get_chainbuf(size_t size)
         cl->buf = (ngx_buf_t *)p;
     }
 
-    cl->buf->last = cl->buf->pos = cl->buf->start = ngx_rbuf_alloc(size);
-    cl->buf->end = cl->buf->start + size;
+    if (rbuf) {
+        cl->buf->last = cl->buf->pos = cl->buf->start = ngx_rbuf_alloc(size);
+        cl->buf->end = cl->buf->start + size;
+    } else {
+        cl->buf->pos = cl->buf->last = cl->buf->start = cl->buf->end = NULL;
+    }
+    cl->buf->memory = 1;
 
     return cl;
 }
 
 void
-ngx_put_chainbuf(ngx_chain_t *cl)
+ngx_put_chainbuf(ngx_chain_t *cl, ngx_flag_t rbuf)
 {
     if (ngx_rbuf_pool == NULL) {
         return;
@@ -203,7 +208,9 @@ ngx_put_chainbuf(ngx_chain_t *cl)
         return;
     }
 
-    ngx_rbuf_free(cl->buf->pos);
+    if (rbuf) {
+        ngx_rbuf_free(cl->buf->pos);
+    }
     cl->next = ngx_rbuf_free_chain;
     ngx_rbuf_free_chain = cl;
 }

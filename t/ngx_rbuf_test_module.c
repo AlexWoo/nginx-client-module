@@ -56,7 +56,7 @@ ngx_rbuf_test_handler(ngx_http_request_t *r)
 {
     ngx_str_t                       size;
     ngx_int_t                       key;
-    ngx_chain_t                    *cl;
+    ngx_chain_t                    *cl, *cl1;
 
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "rbuf test handler");
 
@@ -67,13 +67,21 @@ ngx_rbuf_test_handler(ngx_http_request_t *r)
     }
 
     key = ngx_atoi(size.data, size.len);
-    cl = ngx_get_chainbuf(key);
+    cl = ngx_get_chainbuf(key, 1);
+
+    ngx_rbuf_print();
+
+    cl1 = ngx_get_chainbuf(key, 0);
 
     ngx_rbuf_print();
 
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "rbuf free");
 
-    ngx_put_chainbuf(cl);
+    ngx_put_chainbuf(cl, 1);
+
+    ngx_rbuf_print();
+
+    ngx_put_chainbuf(cl1, 0);
 
     ngx_rbuf_print();
 
