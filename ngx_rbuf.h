@@ -13,17 +13,17 @@
 
 /*
  * paras:
- *      size: size for allocate
+ *      size: buffer size for allocate
  * return:
- *      buffer start pos
+ *      nginx chain
  */
-u_char *ngx_rbuf_alloc(size_t size);
+ngx_chain_t *ngx_get_chainbuf(size_t size);
 
 /*
  * paras:
- *      rb: buf start pos
+ *      cl: nginx chain return by ngx_rtmp_shared_get_chainbuf
  */
-void    ngx_rbuf_free(u_char *rb);
+void ngx_put_chainbuf(ngx_chain_t *cl);
 
 /*
  * only for test

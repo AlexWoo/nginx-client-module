@@ -1,9 +1,5 @@
 ngx_addon_name=ngx_client_module
 
-CORE_MODULES="$CORE_MODULES                                         \
-              ngx_rbuf_module                                       \
-             "
-
 EVENT_MODULES="$EVENT_MODULES                                       \
                ngx_event_resolver_module                            \
               "

@@ -7,11 +7,12 @@
 #include <ngx_core.h>
 
 
-static void *ngx_rbuf_create_conf(ngx_cycle_t *cycle);
-static char *ngx_rbuf_init_conf(ngx_cycle_t *cycle, void *conf);
+static ngx_pool_t              *ngx_rbuf_pool;
 
-static void ngx_rbuf_rbtree_insert_value(ngx_rbtree_node_t *temp,
-        ngx_rbtree_node_t *node, ngx_rbtree_node_t *sentinel);
+static ngx_rbtree_t             ngx_rbuf_rbtree;
+static ngx_rbtree_node_t        ngx_rbuf_sentinel;
+
+static ngx_chain_t             *ngx_rbuf_free_chain;
 
 #define ngx_rbuf_node(n) (ngx_rbuf_node_t *) (n)
 
@@ -30,72 +31,6 @@ typedef struct {
     ngx_rbtree_node_t           node;
     ngx_rbuf_t                 *rbuf;
 } ngx_rbuf_node_t;
-
-typedef struct {
-    ngx_rbtree_t                rbtree;
-    ngx_rbtree_node_t           sentinel;
-    ngx_pool_t                 *pool;
-} ngx_rbuf_conf_t;
-
-
-static ngx_command_t  ngx_rbuf_commands[] = {
-
-      ngx_null_command
-};
-
-
-static ngx_core_module_t  ngx_rbuf_module_ctx = {
-    ngx_string("reusable_buf"),
-    ngx_rbuf_create_conf,                   /* create conf */
-    ngx_rbuf_init_conf                      /* init conf */
-};
-
-
-ngx_module_t  ngx_rbuf_module = {
-    NGX_MODULE_V1,
-    &ngx_rbuf_module_ctx,                   /* module context */
-    ngx_rbuf_commands,                      /* module directives */
-    NGX_CORE_MODULE,                        /* module type */
-    NULL,                                   /* init master */
-    NULL,                                   /* init module */
-    NULL,                                   /* init process */
-    NULL,                                   /* init thread */
-    NULL,                                   /* exit thread */
-    NULL,                                   /* exit process */
-    NULL,                                   /* exit master */
-    NGX_MODULE_V1_PADDING
-};
-
-
-static void *
-ngx_rbuf_create_conf(ngx_cycle_t *cycle)
-{
-    ngx_rbuf_conf_t            *rbcf;
-
-    rbcf = ngx_pcalloc(cycle->pool, sizeof(ngx_rbuf_conf_t));
-    if (rbcf == NULL) {
-        return NULL;
-    }
-
-    return rbcf;
-}
-
-
-static char *
-ngx_rbuf_init_conf(ngx_cycle_t *cycle, void *conf)
-{
-    ngx_rbuf_conf_t            *rbcf = conf;
-
-    rbcf->pool = ngx_create_pool(4096, cycle->log);
-    if (rbcf->pool == NULL) {
-        return NGX_CONF_ERROR;
-    }
-
-    ngx_rbtree_init(&rbcf->rbtree, &rbcf->sentinel,
-                    ngx_rbuf_rbtree_insert_value);
-
-    return NGX_CONF_OK;
-}
 
 
 static void
@@ -122,16 +57,26 @@ ngx_rbuf_rbtree_insert_value(ngx_rbtree_node_t *temp, ngx_rbtree_node_t *node,
     ngx_rbt_red(node);
 }
 
+static ngx_int_t
+ngx_rbuf_init()
+{
+    ngx_rbuf_pool = ngx_create_pool(4096, ngx_cycle->log);
+    if (ngx_rbuf_pool == NULL) {
+        return NGX_ERROR;
+    }
+
+    ngx_rbtree_init(&ngx_rbuf_rbtree, &ngx_rbuf_sentinel,
+                    ngx_rbuf_rbtree_insert_value);
+
+    return NGX_OK;
+}
+
 static ngx_rbuf_node_t *
 ngx_rbuf_find_node(ngx_rbtree_key_t key, ngx_flag_t create)
 {
-    ngx_rbuf_conf_t            *rbcf;
     ngx_rbtree_node_t          *p, *node;
 
-    rbcf = (ngx_rbuf_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
-                                            ngx_rbuf_module);
-
-    for (p = rbcf->rbtree.root; p != &rbcf->sentinel;) {
+    for (p = ngx_rbuf_rbtree.root; p != &ngx_rbuf_sentinel;) {
         if (key == p->key) {
             return ngx_rbuf_node(p);
         }
@@ -143,13 +88,13 @@ ngx_rbuf_find_node(ngx_rbtree_key_t key, ngx_flag_t create)
         return NULL;
     }
 
-    node = ngx_pcalloc(rbcf->pool, sizeof(ngx_rbuf_node_t));
+    node = ngx_pcalloc(ngx_rbuf_pool, sizeof(ngx_rbuf_node_t));
     if (node == NULL) {
         return NULL;
     }
 
     node->key = key;
-    ngx_rbtree_insert(&rbcf->rbtree, node);
+    ngx_rbtree_insert(&ngx_rbuf_rbtree, node);
 
     return ngx_rbuf_node(node);
 }
@@ -173,10 +118,6 @@ ngx_rbuf_get_buf(ngx_rbtree_key_t key)
 {
     ngx_rbuf_node_t            *rn;
     ngx_rbuf_t                 *rb;
-    ngx_rbuf_conf_t            *rbcf;
-
-    rbcf = (ngx_rbuf_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
-                                            ngx_rbuf_module);
 
     rn = ngx_rbuf_find_node(key, 1);
     if (rn == NULL) {
@@ -185,7 +126,7 @@ ngx_rbuf_get_buf(ngx_rbtree_key_t key)
 
     rb = rn->rbuf;
     if (rb == NULL) {
-        rb = ngx_pcalloc(rbcf->pool, sizeof(ngx_rbuf_t) + key);
+        rb = ngx_pcalloc(ngx_rbuf_pool, sizeof(ngx_rbuf_t) + key);
         if (rb == NULL) {
             return NULL;
         }
@@ -199,7 +140,7 @@ ngx_rbuf_get_buf(ngx_rbtree_key_t key)
 }
 
 
-u_char *
+static u_char *
 ngx_rbuf_alloc(size_t size)
 {
     ngx_rbuf_t                 *rb;
@@ -209,13 +150,62 @@ ngx_rbuf_alloc(size_t size)
     return rb->buf;
 }
 
-void
+static void
 ngx_rbuf_free(u_char *rb)
 {
     ngx_rbuf_t                 *rbuf;
 
     rbuf = ngx_rbuf_buf(rb);
     ngx_rbuf_put_buf(rbuf);
+}
+
+
+ngx_chain_t *
+ngx_get_chainbuf(size_t size)
+{
+    ngx_chain_t                *cl;
+    u_char                     *p;
+
+    if (ngx_rbuf_pool == NULL) {
+        ngx_rbuf_init();
+    }
+
+    cl = ngx_rbuf_free_chain;
+    if (cl) {
+        ngx_rbuf_free_chain = cl->next;
+        cl->next = NULL;
+    } else {
+        p = ngx_pcalloc(ngx_rbuf_pool, sizeof(ngx_chain_t) + sizeof(ngx_buf_t));
+        if (p == NULL) {
+            return NULL;
+        }
+
+        cl = (ngx_chain_t *)p;
+
+        p += sizeof(ngx_chain_t);
+        cl->buf = (ngx_buf_t *)p;
+    }
+
+    cl->buf->last = cl->buf->pos = cl->buf->start = ngx_rbuf_alloc(size);
+    cl->buf->end = cl->buf->start + size;
+
+    return cl;
+}
+
+void
+ngx_put_chainbuf(ngx_chain_t *cl)
+{
+    if (ngx_rbuf_pool == NULL) {
+        return;
+    }
+
+    if (cl == NULL) {
+        return;
+    }
+
+    ngx_rbuf_free(cl->buf->pos);
+    cl->next = ngx_rbuf_free_chain;
+    ngx_rbuf_free_chain = cl;
 }
 
 
@@ -256,15 +246,17 @@ void
 ngx_rbuf_print()
 {
 #if (NGX_DEBUG)
-    ngx_rbuf_conf_t            *rbcf;
     ngx_rbtree_node_t          *node;
+    ngx_chain_t                *cl;
 
-    rbcf = (ngx_rbuf_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
-                                            ngx_rbuf_module);
-
-    node = rbcf->rbtree.root;
+    node = ngx_rbuf_rbtree.root;
     ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0, "ngx_rbuf_print()");
-    ngx_rbuf_print_recursion(node, &rbcf->sentinel);
+    ngx_rbuf_print_recursion(node, &ngx_rbuf_sentinel);
+
+    ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0, "ngx_rbuf_free_chain");
+    for (cl = ngx_rbuf_free_chain; cl; cl = cl->next) {
+        ngx_log_error(NGX_LOG_INFO, ngx_cycle->log, 0, "    %p", cl);
+    }
 
 #endif
 }
