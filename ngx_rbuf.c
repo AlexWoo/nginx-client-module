@@ -165,6 +165,7 @@ ngx_get_chainbuf(size_t size, ngx_flag_t rbuf)
 {
     ngx_chain_t                *cl;
     u_char                     *p;
+    unsigned                   *alloc;
 
     if (ngx_rbuf_pool == NULL) {
         ngx_rbuf_init();
@@ -174,8 +175,13 @@ ngx_get_chainbuf(size_t size, ngx_flag_t rbuf)
     if (cl) {
         ngx_rbuf_free_chain = cl->next;
         cl->next = NULL;
+        p = (u_char *)cl;
+        p = ngx_pcalloc(ngx_rbuf_pool, sizeof(ngx_chain_t) + sizeof(ngx_buf_t)
+                + sizeof(unsigned));
+        alloc = (unsigned *)p;
     } else {
-        p = ngx_pcalloc(ngx_rbuf_pool, sizeof(ngx_chain_t) + sizeof(ngx_buf_t));
+        p = ngx_pcalloc(ngx_rbuf_pool, sizeof(ngx_chain_t) + sizeof(ngx_buf_t)
+                + sizeof(unsigned));
         if (p == NULL) {
             return NULL;
         }
@@ -184,13 +190,18 @@ ngx_get_chainbuf(size_t size, ngx_flag_t rbuf)
 
         p += sizeof(ngx_chain_t);
         cl->buf = (ngx_buf_t *)p;
+
+        p += sizeof(ngx_buf_t);
+        alloc = (unsigned *)p;
     }
 
     if (rbuf) {
         cl->buf->last = cl->buf->pos = cl->buf->start = ngx_rbuf_alloc(size);
         cl->buf->end = cl->buf->start + size;
+        *alloc = 1;
     } else {
         cl->buf->pos = cl->buf->last = cl->buf->start = cl->buf->end = NULL;
+        *alloc = 0;
     }
     cl->buf->memory = 1;
 
@@ -198,8 +209,11 @@ ngx_get_chainbuf(size_t size, ngx_flag_t rbuf)
 }
 
 void
-ngx_put_chainbuf(ngx_chain_t *cl, ngx_flag_t rbuf)
+ngx_put_chainbuf(ngx_chain_t *cl)
 {
+    u_char                     *p;
+    unsigned                   *alloc;
+
     if (ngx_rbuf_pool == NULL) {
         return;
     }
@@ -208,7 +222,10 @@ ngx_put_chainbuf(ngx_chain_t *cl, ngx_flag_t rbuf)
         return;
     }
 
-    if (rbuf) {
+    p = (u_char *)cl;
+    p = p + sizeof(ngx_chain_t) + sizeof(ngx_buf_t);
+    alloc = (unsigned *)p;
+    if (*alloc) {
         ngx_rbuf_free(cl->buf->pos);
     }
     cl->next = ngx_rbuf_free_chain;

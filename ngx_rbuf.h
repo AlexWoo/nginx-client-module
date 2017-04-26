@@ -23,9 +23,8 @@ ngx_chain_t *ngx_get_chainbuf(size_t size, ngx_flag_t rbuf);
 /*
  * paras:
  *      cl: nginx chain return by ngx_rtmp_shared_get_chainbuf
- *      rbuf: whether free rbuf
  */
-void ngx_put_chainbuf(ngx_chain_t *cl, ngx_flag_t rbuf);
+void ngx_put_chainbuf(ngx_chain_t *cl);
 
 /*
  * only for test
