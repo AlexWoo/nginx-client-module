@@ -68,10 +68,12 @@ ngx_rbuf_test_handler(ngx_http_request_t *r)
 
     key = ngx_atoi(size.data, size.len);
     cl = ngx_get_chainbuf(key, 1);
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "cl: %p", cl);
 
     ngx_rbuf_print();
 
     cl1 = ngx_get_chainbuf(key, 0);
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "cl1: %p", cl1);
     cl1->buf->start = cl->buf->start;
     cl1->buf->end = cl->buf->end;
     cl1->buf->pos = cl->buf->pos;
@@ -80,6 +82,7 @@ ngx_rbuf_test_handler(ngx_http_request_t *r)
     ngx_rbuf_print();
 
     cl2 = ngx_get_chainbuf(key, 0);
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "cl2: %p", cl2);
     cl2->buf->start = cl->buf->start;
     cl2->buf->end = cl->buf->end;
     cl2->buf->pos = cl->buf->pos;

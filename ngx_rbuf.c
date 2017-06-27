@@ -176,8 +176,7 @@ ngx_get_chainbuf(size_t size, ngx_flag_t rbuf)
         ngx_rbuf_free_chain = cl->next;
         cl->next = NULL;
         p = (u_char *)cl;
-        p = ngx_pcalloc(ngx_rbuf_pool, sizeof(ngx_chain_t) + sizeof(ngx_buf_t)
-                + sizeof(unsigned));
+        p = p + sizeof(ngx_chain_t) + sizeof(ngx_buf_t);
         alloc = (unsigned *)p;
     } else {
         p = ngx_pcalloc(ngx_rbuf_pool, sizeof(ngx_chain_t) + sizeof(ngx_buf_t)
