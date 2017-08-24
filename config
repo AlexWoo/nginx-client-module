@@ -8,11 +8,13 @@ NGX_ADDON_SRCS="$NGX_ADDON_SRCS                                     \
                 $ngx_addon_dir/ngx_event_resolver.c                 \
                 $ngx_addon_dir/ngx_rbuf.c                           \
                 $ngx_addon_dir/ngx_client.c                         \
+                $ngx_addon_dir/ngx_request_url.c                    \
                "
 
 NGX_ADDON_DEPS="$NGX_ADDON_DEPS                                     \
                 $ngx_addon_dir/ngx_event_resolver.h                 \
                 $ngx_addon_dir/ngx_rbuf.h                           \
                 $ngx_addon_dir/ngx_client.h                         \
+                $ngx_addon_dir/ngx_request_url.h                    \
                "
 
