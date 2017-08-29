@@ -206,7 +206,7 @@ ngx_client_test_reading(ngx_client_session_t *s)
     if ((ngx_event_flags & NGX_USE_LEVEL_EVENT) && rev->active) {
 
         if (ngx_del_event(rev, NGX_READ_EVENT, 0) != NGX_OK) {
-            ngx_client_close(s);
+            goto closed;
         }
     }
 
@@ -248,8 +248,7 @@ ngx_client_handler(ngx_event_t *ev)
 
     /* async connect failed */
     if (!s->connected && ngx_client_test_connect(c) != NGX_OK) {
-        ngx_client_close_connection(c);
-        s->peer.connection = NULL;
+        ngx_client_reconnect(s);
         return;
     }
 
@@ -328,7 +327,7 @@ ngx_client_connect_server(void *data, ngx_resolver_addr_t *addrs,
     if (c->pool == NULL) {
         c->pool = ngx_create_pool(128, s->log);
         if (c->pool == NULL) {
-            ngx_client_close(s);
+            ngx_client_reconnect(s);
             return;
         }
     }
@@ -469,11 +468,8 @@ ngx_client_reconnect(ngx_client_session_t *s)
     ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client reconnect");
 
     if (s->ci->max_retries && s->peer.tries > s->ci->max_retries) {
-        if (s->ci->closed) {
-            s->ci->closed(s);
-        }
-        ngx_client_close(s);
 
+        ngx_client_close(s);
         return;
     }
 
@@ -847,21 +843,25 @@ ngx_client_close(ngx_client_session_t *s)
     ngx_connection_t           *c;
     ngx_pool_t                 *pool;
 
-    c = s->peer.connection;
-
-    ngx_log_error(NGX_LOG_INFO, s->log, 0,
-            "nginx client close, connection:%p timeset:%d",
-            c, s->connect_event.timer_set);
-
-    if (c == NULL || c->destroyed) {
-        goto destroyed;
+    if (s->closed) {
+        return;
     }
 
-    ngx_client_close_connection(c);
+    s->closed = 1;
+    c = s->peer.connection;
 
-destroyed:
+    ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client close");
+
+    if (c && !c->destroyed) {
+        ngx_client_close_connection(c);
+    }
+
     if (s->connect_event.timer_set) {
         ngx_del_timer(&s->connect_event);
+    }
+
+    if (s->ci->closed) {
+        s->ci->closed(s);
     }
 
     pool = s->pool;

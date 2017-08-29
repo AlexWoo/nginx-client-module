@@ -75,6 +75,7 @@ struct ngx_client_session_s {
     size_t                      limit_rate;
     size_t                      limit_rate_after;
 
+    unsigned                    closed:1;
     unsigned                    connected:1;
 
     /* configured */
