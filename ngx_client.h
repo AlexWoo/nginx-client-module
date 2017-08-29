@@ -24,7 +24,8 @@ typedef struct {
     ngx_str_t                   local;
     ngx_str_t                   server;
 
-    ngx_msec_t                  timeout;
+    ngx_msec_t                  connect_timeout;
+    ngx_msec_t                  send_timeout;
     ngx_uint_t                  max_retries;    /* 0 for retry all the time */
 
     int                         type;           /* SOCK_STREAM or SOCK_DGRAM */
@@ -54,6 +55,8 @@ typedef struct {
 struct ngx_client_session_s {
     ngx_peer_connection_t       peer;
 
+    ngx_connection_t           *connection;
+
     ngx_str_t                   host;
     in_port_t                   port;
 
@@ -78,9 +81,17 @@ struct ngx_client_session_s {
     ngx_client_init_t          *ci;
 };
 
+void ngx_client_reconnect(ngx_client_session_t *s);
+
 ngx_client_session_t *ngx_client_connect(ngx_client_init_t *ci);
-ngx_int_t ngx_client_write(ngx_client_session_t *s, ngx_chain_t *in);
-ngx_chain_t *ngx_client_read(ngx_client_session_t *s);
+
+ngx_int_t ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out);
+
+ngx_int_t ngx_client_read(ngx_client_session_t *s, ngx_chain_t *in);
+
+void ngx_client_set_handler(ngx_client_session_t *s);
+
 void ngx_client_close(ngx_client_session_t *s);
+
 
 #endif

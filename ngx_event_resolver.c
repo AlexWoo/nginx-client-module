@@ -164,10 +164,12 @@ ngx_event_resolver_handler(ngx_resolver_ctx_t *ctx)
         ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "event resolver, "
                 "%V could not be resolved (%i: %s)", &ctx->name, ctx->state,
                 ngx_resolver_strerror(ctx->state));
+        erctx->handler(erctx->data, NULL, 0);
+
         goto failed;
     }
 
-    erctx->handler(erctx->data, ctx->addrs[0].sockaddr, ctx->addrs[0].socklen);
+    erctx->handler(erctx->data, ctx->addrs, ctx->naddrs);
 
 failed:
     ngx_resolve_name_done(ctx);
@@ -183,6 +185,14 @@ ngx_event_resolver_start_resolver(ngx_str_t *domain,
     ngx_resolver_ctx_t             *ctx, temp;
 
     ercf = ngx_event_get_conf(ngx_cycle->conf_ctx, ngx_event_resolver_module);
+
+    if (ercf->resolver == NULL) {
+        ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "event resolver, "
+                "resolver does not configured");
+        h(data, NULL, 0);
+
+        return;
+    }
 
     temp.name = *domain;
 
@@ -211,16 +221,18 @@ ngx_event_resolver_start_resolver(ngx_str_t *domain,
 
     if (ngx_resolve_name(ctx) != NGX_OK) {
         ngx_log_error(NGX_LOG_ERR, ngx_cycle->log, 0, "event resolver, "
-                "resolv %V failed", *domain);
+                "resolv %V failed", domain);
+
         goto failed;
     }
 
     return;
 
 failed:
+    h(data, NULL, 0);
+
     if (ctx == NULL || ctx == NGX_NO_RESOLVER) {
         ngx_resolve_name_done(ctx);
         ngx_event_resolver_put_ctx(erctx);
     }
 }
-
