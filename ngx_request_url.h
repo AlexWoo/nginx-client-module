@@ -22,6 +22,9 @@ typedef struct {
     ngx_str_t                   path;
     ngx_str_t                   args;
     ngx_str_t                   fragment;
+
+    ngx_str_t                   host_with_port;
+    ngx_str_t                   uri_with_args;
 } ngx_request_url_t;
 
 

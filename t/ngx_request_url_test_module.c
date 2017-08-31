@@ -53,8 +53,9 @@ ngx_module_t  ngx_request_url_test_module = {
 
 
 static ngx_int_t
-ngx_parse_request_url_test(ngx_int_t ret, char *scheme, char *user, char *host,
-        char *port, char *path, char *args, char *fragment, char *url)
+ngx_parse_request_url_test(ngx_int_t ret, char *url, char *scheme, char *user,
+        char *host, char *port, char *path, char *args, char *fragment,
+        char *host_with_port, char *uri_with_args)
 {
     ngx_int_t                   _ret;
     ngx_str_t                   _url;
@@ -67,6 +68,10 @@ ngx_parse_request_url_test(ngx_int_t ret, char *scheme, char *user, char *host,
     _ret = ngx_parse_request_url(&rurl, &_url);
     if (ret != _ret) {
         return 0;
+    }
+
+    if (_ret == NGX_ERROR) {
+        return 1;
     }
 
 #define TEST(para)                                                      \
@@ -83,6 +88,8 @@ ngx_parse_request_url_test(ngx_int_t ret, char *scheme, char *user, char *host,
     TEST(path)
     TEST(args)
     TEST(fragment)
+    TEST(host_with_port)
+    TEST(uri_with_args)
 
 #undef TEST
 
@@ -118,44 +125,96 @@ ngx_request_url_test_handler(ngx_http_request_t *r)
 
     NGX_TEST_INIT
 
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, NULL, NULL, NULL, NULL,
-                NULL, NULL, NULL, "test"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http", NULL, NULL,
-                NULL, NULL, NULL, NULL, "http://"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http", "alex", NULL,
-                NULL, NULL, NULL, NULL, "http://alex@"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http", "alex", "test",
-                NULL, NULL, NULL, NULL, "http://alex@test"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http", "alex",
-                "test", NULL, NULL, NULL, NULL, "http://alex@test:"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http", "alex",
-                "test", "8080", NULL, NULL, NULL, "http://alex@test:8080"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http", NULL, NULL,
-                NULL, NULL, NULL, NULL, "http://@test:8080"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http", NULL, "test", NULL,
-                NULL, NULL, NULL, "http://test"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http", NULL, "test",
-                NULL, NULL, NULL, NULL, "http://test:"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http", NULL, "test",
-                "8080", NULL, NULL, NULL, "http://test:8080"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http", NULL, "test",
-                "8080", NULL, NULL, NULL, "http://test:8080/"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http", NULL, "test",
-                "8080", "live", NULL, NULL, "http://test:8080/live"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http", "alex", "test",
-                "8080", "live/test", NULL, NULL,
-                "http://alex@test/live/test"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http", "alex", "test",
-                "80", "live/test", NULL, NULL,
-                "http://alex@test:80/live/test?"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http", "alex", "test",
-                "80", "live/test", "a=b&c=d", NULL,
-                "http://alex@test:80/live/test?a=b&c=d"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http", "alex", NULL,
-                NULL, NULL, NULL, NULL, "http://alex@/live/test?a=b&c=d"));
-    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http", "alex", "test",
-                "8080", "live/test", "a=b&c=d", "test",
-                "http://alex@test:8080/live/test?a=b&c=d#test"));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "test",
+                NULL,
+                NULL, NULL, NULL,
+                NULL, NULL, NULL,
+                NULL, NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http://",
+                NULL,
+                NULL, NULL, NULL,
+                NULL, NULL, NULL,
+                NULL, NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http://alex@",
+                NULL,
+                NULL, NULL, NULL,
+                NULL, NULL, NULL,
+                NULL, NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http://alex@test",
+                "http",
+                "alex", "test", NULL,
+                NULL, NULL, NULL,
+                "test", NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http://alex@test:",
+                NULL,
+                NULL, NULL, NULL,
+                NULL, NULL, NULL,
+                NULL, NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http://alex@test:8080",
+                "http",
+                "alex", "test", "8080",
+                NULL, NULL, NULL,
+                "test:8080", NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http://@test:8080",
+                NULL,
+                NULL, NULL, NULL,
+                NULL, NULL, NULL,
+                NULL, NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http://test",
+                "http",
+                NULL, "test", NULL,
+                NULL, NULL, NULL,
+                "test", NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR, "http://test:",
+                NULL,
+                NULL, NULL, NULL,
+                NULL, NULL, NULL,
+                NULL, NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http://test:8080",
+                "http",
+                NULL, "test", "8080",
+                NULL, NULL, NULL,
+                "test:8080", NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http://test:8080/",
+                "http",
+                NULL, "test", "8080",
+                NULL, NULL, NULL,
+                "test:8080", NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK, "http://test:8080/live",
+                "http",
+                NULL, "test", "8080",
+                "live", NULL, NULL,
+                "test:8080", "live"));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK,
+                "http://alex@test/live/test",
+                "http",
+                "alex", "test", "8080",
+                "live/test", NULL, NULL,
+                "test", "live/test"));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR,
+                "http://alex@test:80/live/test?",
+                NULL,
+                NULL, NULL, NULL,
+                NULL, NULL, NULL,
+                NULL, NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK,
+                "http://alex@test:80/live/test?a=b&c=d",
+                "http",
+                "alex", "test", "80",
+                "live/test", "a=b&c=d", NULL,
+                "test:80", "live/test?a=b&c=d"));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_ERROR,
+                "http://alex@/live/test?a=b&c=d",
+                NULL,
+                NULL, NULL, NULL,
+                NULL, NULL, NULL,
+                NULL, NULL));
+    NGX_TEST_ISOK(ngx_parse_request_url_test(NGX_OK,
+                "http://alex@test:8080/live/test?a=b&c=d#test",
+                "http",
+                "alex", "test", "8080",
+                "live/test", "a=b&c=d", "test",
+                "test:8080", "live/test?a=b&c=d#test"));
 
     NGX_TEST_ISOK(ngx_request_port_test(0, "", "abcd"));
     NGX_TEST_ISOK(ngx_request_port_test(1234, "", "1234"));

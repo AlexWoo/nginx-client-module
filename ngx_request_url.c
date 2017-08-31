@@ -76,6 +76,8 @@ ngx_parse_request_url(ngx_request_url_t *request_url, ngx_str_t *url)
     if (port == NULL) { /* no port */
         request_url->host.data = host;
         request_url->host.len = host_last - host;
+
+        request_url->host_with_port = request_url->host;
     } else {
         request_url->host.data = host;
         request_url->host.len = port - host;
@@ -86,6 +88,9 @@ ngx_parse_request_url(ngx_request_url_t *request_url, ngx_str_t *url)
 
         request_url->port.data = port;
         request_url->port.len = host_last - port;
+
+        request_url->host.data = host;
+        request_url->host.len = host_last - host;
     }
 
     path = ++host_last;
@@ -97,6 +102,9 @@ ngx_parse_request_url(ngx_request_url_t *request_url, ngx_str_t *url)
     if (args == NULL) { /* no args */
         request_url->path.data = path;
         request_url->path.len = last - path;
+
+        request_url->uri_with_args = request_url->path;
+
         goto done;
     } else {
         request_url->path.data = path;
@@ -122,6 +130,9 @@ ngx_parse_request_url(ngx_request_url_t *request_url, ngx_str_t *url)
         request_url->fragment.data = fragment;
         request_url->fragment.len = last - fragment;
     }
+
+    request_url->uri_with_args.data = path;
+    request_url->uri_with_args.len = last - path;
 
 done:
     return NGX_OK;
