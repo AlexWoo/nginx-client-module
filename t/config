@@ -1,20 +1,9 @@
 ngx_addon_name=ngx_client_test_module
 
 HTTP_MODULES="$HTTP_MODULES                                         \
-              ngx_event_resolver_test_module                        \
-              ngx_rbuf_test_module                                  \
-              ngx_http_client_test_module                           \
-              ngx_request_url_test_module                           \
+             ngx_client_test_module                                 \
              "
 
 NGX_ADDON_SRCS="$NGX_ADDON_SRCS
-                $ngx_addon_dir/ngx_event_resolver_test_module.c     \
-                $ngx_addon_dir/ngx_rbuf_test_module.c               \
-                $ngx_addon_dir/ngx_http_client_test_module.c        \
-                $ngx_addon_dir/ngx_request_url_test_module.c        \
+               $ngx_addon_dir/ngx_client_test_module.c              \
                "
-
-NGX_ADDON_DEPS="$NGX_ADDON_DEPS                                     \
-                $ngx_addon_dir/ngx_test_macro.h                     \
-               "
-

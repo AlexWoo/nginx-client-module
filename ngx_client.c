@@ -6,43 +6,36 @@
 #include <ngx_event_connect.h>
 #include "ngx_client.h"
 #include "ngx_event_resolver.h"
+#include "ngx_dynamic_resolver.h"
 
 
-static void  ngx_client_connect_server(void *data, ngx_resolver_addr_t *addrs,
-        ngx_uint_t naddrs);
-static void ngx_client_close_connection(ngx_connection_t *c);
+typedef struct {
+    ngx_client_session_t       *session;
+} ngx_client_log_ctx_t;
 
 
-static ngx_addr_t *
-ngx_client_get_local(ngx_client_session_t *s)
+static u_char *
+ngx_client_log_error(ngx_log_t *log, u_char *buf, size_t len)
 {
-    ngx_addr_t                 *addr;
-    ngx_int_t                   rc;
+    u_char                     *p;
+    ngx_client_session_t       *s;
+    ngx_client_log_ctx_t       *ctx;
 
-    if (s->ci->local.len == 0) {
-        return NULL;
+    if (log->action) {
+        p = ngx_snprintf(buf, len, " while %s", log->action);
+        len -= p - buf;
+        buf = p;
     }
 
-    addr = ngx_pcalloc(s->pool, sizeof(ngx_addr_t));
-    if (addr == NULL) {
-        return NULL;
-    }
+    ctx = log->data;
+    s = ctx->session;
 
-    rc = ngx_parse_addr(s->pool, addr, s->ci->local.data, s->ci->local.len);
+    p = ngx_snprintf(buf, len, ", server ip: %V, server: %V, session: %p",
+            &s->connection->addr_text, &s->ci->server, s);
+    len -= p - buf;
+    buf = p;
 
-    switch (rc) {
-    case NGX_OK:
-        addr->name = s->ci->local;
-        return addr;
-
-    case NGX_DECLINED:
-        ngx_log_error(NGX_LOG_ERR, s->log, 0, "invalid local address \"%V\"",
-                &s->ci->local);
-        return NULL;
-
-    default:
-        return NULL;
-    }
+    return p;
 }
 
 static ngx_int_t
@@ -109,14 +102,16 @@ ngx_client_test_connect(ngx_connection_t *c)
 static void
 ngx_client_connected(ngx_client_session_t *s)
 {
-    ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client connected");
+    if (ngx_client_test_connect(s->connection) != NGX_OK) {
+        ngx_client_reconnect(s);
+        return;
+    }
+
+    ngx_log_debug0(NGX_LOG_DEBUG_CORE, s->connection->log, 0,
+            "nginx client connected");
 
     s->connected = 1;
     s->peer.tries = 0;
-
-    if (s->connect_event.timer_set) {
-        ngx_del_timer(&s->connect_event);
-    }
 
     if (s->ci->connected) {
         s->ci->connected(s);
@@ -135,7 +130,8 @@ ngx_client_test_reading(ngx_client_session_t *s)
     c = s->peer.connection;
     rev = c->read;
 
-    ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client test reading");
+    ngx_log_debug0(NGX_LOG_DEBUG_CORE, s->connection->log, 0,
+            "nginx client test reading");
 
 #if (NGX_HAVE_KQUEUE)
 
@@ -197,7 +193,7 @@ ngx_client_test_reading(ngx_client_session_t *s)
             rev->eof = 1;
             c->error = 1;
 
-            goto closed;
+            goto error;
         }
     }
 
@@ -206,7 +202,7 @@ ngx_client_test_reading(ngx_client_session_t *s)
     if ((ngx_event_flags & NGX_USE_LEVEL_EVENT) && rev->active) {
 
         if (ngx_del_event(rev, NGX_READ_EVENT, 0) != NGX_OK) {
-            goto closed;
+            goto error;
         }
     }
 
@@ -214,12 +210,19 @@ ngx_client_test_reading(ngx_client_session_t *s)
 
 closed:
 
+    ngx_log_error(NGX_LOG_INFO, c->log, err, "nginx client test reading close");
+
+    ngx_client_close(s);
+
+    return;
+
+error:
+
     if (err) {
         rev->error = 1;
     }
 
-    ngx_log_error(NGX_LOG_INFO, c->log, err,
-            "nginx client test reading  error");
+    ngx_log_error(NGX_LOG_INFO, c->log, err, "nginx client test reading error");
 
     ngx_client_reconnect(s);
 
@@ -229,8 +232,6 @@ closed:
 static void
 ngx_client_write_handler(ngx_client_session_t *s)
 {
-    ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client write handler");
-
     /* write data buffered in s->out */
     ngx_client_write(s, NULL);
 }
@@ -244,11 +245,12 @@ ngx_client_handler(ngx_event_t *ev)
     c = ev->data;
     s = c->data;
 
-    ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client handler");
-
-    /* async connect failed */
-    if (!s->connected && ngx_client_test_connect(c) != NGX_OK) {
+    if (ev->timedout) { /* rev or wev timedout */
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, NGX_ETIMEDOUT,
+                "server timed out");
+        c->timedout = 1;
         ngx_client_reconnect(s);
+
         return;
     }
 
@@ -259,21 +261,11 @@ ngx_client_handler(ngx_event_t *ev)
         return;
     }
 
-    if (ev->timedout) { /* rev or wev timedout */
-        ngx_log_error(NGX_LOG_INFO, c->log, NGX_ETIMEDOUT, "server timed out");
-        c->timedout = 1;
-        ngx_client_reconnect(s);
-
-        return;
-    }
-
     if (ev->write) {
-        ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client handler send");
         if (s->ci->send) {
             s->ci->send(s);
         }
     } else {
-        ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client handler recv");
         if (s->ci->recv) {
             s->ci->recv(s);
         }
@@ -281,63 +273,68 @@ ngx_client_handler(ngx_event_t *ev)
 }
 
 static void
-ngx_client_connect_server(void *data, ngx_resolver_addr_t *addrs,
-        ngx_uint_t naddrs)
+ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
 {
     ngx_client_session_t       *s;
     ngx_connection_t           *c;
     ngx_int_t                   rc;
-    ngx_uint_t                  n;
-    struct sockaddr_in         *sin;
+    ngx_client_log_ctx_t       *ctx;
 
     s = data;
 
-    ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client connect server");
+    ngx_inet_set_port(sa, s->ci->port);
 
-    if (naddrs == 0) {
-        ngx_log_error(NGX_LOG_ERR, s->log, ngx_errno,
-                "nginx client resolver failed");
-        goto failed;
-    }
-
-    n = ngx_random() % naddrs;
-
-    sin = (struct sockaddr_in *) addrs[n].sockaddr;
-    sin->sin_port = htons(s->port);
-
-    s->peer.sockaddr = addrs[n].sockaddr;
-    s->peer.socklen = addrs[n].socklen;
+    s->peer.sockaddr = sa;
+    s->peer.socklen = socklen;
     s->peer.name = &s->ci->server;
 
-    s->connected = 0;
     rc = ngx_event_connect_peer(&s->peer);
     if (rc != NGX_OK && rc != NGX_AGAIN) {
-        ngx_log_error(NGX_LOG_ERR, s->log, ngx_errno,
+        ngx_log_error(NGX_LOG_ERR, &s->ci->log, ngx_errno,
                 "nginx client connect peer failed");
         goto failed;
     }
-
-    c = s->peer.connection;
-
-    c->data = s;
-
-    c->write->handler = ngx_client_handler;
-    c->read->handler = ngx_client_handler;
+    s->connection = s->peer.connection;
+    c = s->connection;
 
     if (c->pool == NULL) {
-        c->pool = ngx_create_pool(128, s->log);
+        c->pool = ngx_create_pool(128, &s->ci->log);
         if (c->pool == NULL) {
             ngx_client_reconnect(s);
             return;
         }
     }
 
-    c->log = s->log;
-    c->pool->log = c->log;
-    c->read->log = c->log;
-    c->write->log = c->log;
+    ctx = ngx_pcalloc(c->pool, sizeof(ngx_client_log_ctx_t));
+    if (ctx == NULL) {
+        ngx_client_reconnect(s);
+        return;
+    }
+    ctx->session = s;
+
+    c->addr_text.data = ngx_pcalloc(c->pool, NGX_SOCKADDR_STRLEN);
+    if (c->addr_text.data == NULL) {
+        ngx_client_reconnect(s);
+        return;
+    }
+    c->addr_text.len = ngx_sock_ntop(sa, socklen, c->addr_text.data,
+                                     NGX_SOCKADDR_STRLEN, 1);
+
+    ngx_log_debug1(NGX_LOG_DEBUG_CORE, &s->ci->log, 0,
+            "nginx client connect server, rc: %i", rc);
+
+    c->log->connection = c->number;
+    c->log->handler = ngx_client_log_error;
+    c->log->data = ctx;
+    c->log->action = NULL;
+
+    c->data = s;
+
+    c->write->handler = ngx_client_handler;
+    c->read->handler = ngx_client_handler;
 
     if (rc == NGX_AGAIN) {
+        ngx_add_timer(c->write, s->ci->connect_timeout);
         return;
     }
 
@@ -352,109 +349,76 @@ failed:
 }
 
 static void
-ngx_client_connect_timeout(ngx_event_t *ev)
+ngx_client_resolver_server(void *data, ngx_resolver_addr_t *addrs,
+        ngx_uint_t naddrs)
 {
     ngx_client_session_t       *s;
+    ngx_uint_t                  n;
 
-    s = ev->data;
+    s = data;
 
-    if (ev->timedout) {
-        ngx_log_error(NGX_LOG_ERR, s->log, ngx_errno,
-                "nginx client connect to server timeout");
-
+    if (naddrs == 0) {
+        ngx_log_error(NGX_LOG_ERR, &s->ci->log, ngx_errno,
+                "nginx client resolver failed");
         ngx_client_reconnect(s);
+        return;
     }
+
+    n = ngx_random() % naddrs;
+
+    ngx_client_connect_server(data, addrs[n].sockaddr, addrs[n].socklen);
 }
 
 static ngx_client_session_t *
-ngx_client_create_session(ngx_client_init_t *ci)
+ngx_client_create_session(ngx_client_init_t *ci, ngx_log_t *log)
 {
     ngx_client_session_t       *s;
-    ngx_pool_t                 *pool;
-    u_char                     *port, *last;
-    ngx_int_t                   n;
-    size_t                      len;
 
-    ngx_log_error(NGX_LOG_INFO, ci->log, 0, "nginx client create session");
-
-    pool = ngx_create_pool(4096, ci->log);
-    if (pool == NULL) {
-        return NULL;
-    }
-
-    s = ngx_pcalloc(pool, sizeof(ngx_client_session_t));
+    s = ngx_pcalloc(ci->pool, sizeof(ngx_client_session_t));
     if (s == NULL) {
-        ngx_destroy_pool(pool);
-        return NULL;
+        goto clear;
     }
 
-    s->pool = pool;
-    s->log = ci->log;
+    s->pool = ci->pool;
 
     s->ci = ci;
 
-    /* set ci default value */
-    if (ci->connect_timeout == 0) { /* set default reconnect timeout */
-        ci->connect_timeout = 3000;
-    }
-
-    if (ci->send_timeout == 0) { /* set default send timeout */
-        ci->send_timeout = 60000;
-    }
-
-    if (ci->type == 0) {
-        ci->type = SOCK_STREAM;
-    }
-
-    if (ci->postpone_output == 0) {
-        ci->postpone_output = 1460;
-    }
-
     ngx_client_set_handler(s);
 
-    s->peer.log = s->log;
+    s->peer.log = &s->ci->log;
     s->peer.get = ngx_client_get_peer;
     s->peer.free = ngx_client_free_peer;
-    s->peer.local = ngx_client_get_local(s);
-    s->peer.type = s->ci->type;
-    s->peer.rcvbuf = s->ci->recvbuf;
-    s->peer.cached = s->ci->cached;
-    s->peer.log_error = s->ci->log_error;
-
-    last = s->ci->server.data + s->ci->server.len;
-
-    s->host.data = s->ci->server.data;
-
-    port = ngx_strlchr(s->host.data, last, ':');
-
-    if (port) {
-        s->host.len = port - s->host.data;
-        ++port;
-
-        len = last - port;
-
-        n = ngx_atoi(port, len);
-
-        if (n < 1 || n > 65535) {
-            ngx_log_error(NGX_LOG_ERR, s->log, 0, "invalid port");
-            return NULL;
-        }
-
-        s->port = (in_port_t) n;
-    } else {
-        s->host.len = s->ci->server.len;
-    }
+    s->peer.local = ci->local;
+    s->peer.type = ci->type;
+    s->peer.rcvbuf = ci->recvbuf;
+    s->peer.cached = ci->cached;
+    s->peer.log_error = ci->log_error;
 
     return s;
+
+clear:
+    ngx_destroy_pool(ci->pool);
+
+    return NULL;
 }
 
 static void
-ngx_client_close_connection(ngx_connection_t *c)
+ngx_client_close_connection(ngx_client_session_t *s)
 {
+    ngx_connection_t           *c;
     ngx_pool_t                 *pool;
 
-    ngx_log_error(NGX_LOG_INFO, c->log, 0, "nginx client close connection");
+    c = s->connection;
 
+    if (c == NULL || c->destroyed) {
+        return;
+    }
+
+    ngx_log_debug0(NGX_LOG_DEBUG_CORE, c->log, 0,
+            "nginx client close connection");
+
+    s->connected = 0;
+    s->connection = NULL;
     c->destroyed = 1;
 
     pool = c->pool;
@@ -462,50 +426,207 @@ ngx_client_close_connection(ngx_connection_t *c)
     ngx_destroy_pool(pool);
 }
 
-void
-ngx_client_reconnect(ngx_client_session_t *s)
-{
-    ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client reconnect");
-
-    if (s->ci->max_retries && s->peer.tries > s->ci->max_retries) {
-
-        ngx_client_close(s);
-        return;
-    }
-
-    ++s->peer.tries;
-    ngx_add_timer(&s->connect_event, s->ci->connect_timeout);
-    if (s->peer.connection) {
-        ngx_client_close_connection(s->peer.connection);
-    }
-
-    ngx_event_resolver_start_resolver(&s->host, ngx_client_connect_server, s);
-}
-
-ngx_client_session_t *
-ngx_client_connect(ngx_client_init_t *ci)
+static void
+ngx_client_reconnect_handler(ngx_event_t *ev)
 {
     ngx_client_session_t       *s;
 
-    ngx_log_error(NGX_LOG_INFO, ci->log, 0, "nginx client connect");
+    s = ev->data;
+
+    ++s->peer.tries;
+
+    if (s->peer.connection) {
+        ngx_client_close_connection(s);
+    }
+
+    if (s->ci->dynamic_resolver) {
+        ngx_dynamic_resolver_start_resolver(&s->ci->server,
+                ngx_client_connect_server, s);
+    } else {
+        ngx_event_resolver_start_resolver(&s->ci->server,
+                ngx_client_resolver_server, s);
+    }
+}
+
+
+ngx_client_init_t *
+ngx_client_init(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
+        ngx_log_t *log)
+{
+    ngx_client_init_t          *ci;
+    ngx_pool_t                 *pool = NULL;
+    ngx_int_t                   rc, n;
+    u_char                     *p, *last;
+    size_t                      plen;
+
+    if (peer == NULL || peer->len == 0) {
+        ngx_log_error(NGX_LOG_ERR, log, 0, "client init, peer is NULL");
+        goto clear;
+    }
+
+    pool = ngx_create_pool(4096, log);
+    if (pool == NULL) {
+        return NULL;
+    }
+
+    ci = ngx_pcalloc(pool, sizeof(ngx_client_init_t));
+    if (ci == NULL) {
+        goto clear;
+    }
+    ci->pool = pool;
+
+    ci->log = ngx_cycle->new_log;
+
+    /* parse remote */
+    last = peer->data + peer->len;
+
+#if (NGX_HAVE_INET6)
+    if (peer->len && peer->data[0] == '[') {
+
+        p = ngx_strlchr(peer->data, last, ']');
+
+        if (p == NULL || p == last - 1) {
+            ngx_log_error(NGX_LOG_ERR, log, 0,
+                    "client init, parse peer %V error", peer);
+            goto clear;
+        }
+
+        ++p;
+    } else
+#endif
+    {
+        p = ngx_strlchr(peer->data, last, ':');
+        if (p == NULL) {
+            p = last;
+        }
+    }
+
+    ci->server.len = p - peer->data;
+    ci->server.data = ngx_pcalloc(ci->pool, ci->server.len);
+    if (ci->server.data == NULL) {
+        goto clear;
+    }
+    ngx_memcpy(ci->server.data, peer->data, peer->len);
+
+    if (p != last) { /* has port */
+        if (*p != ':') {
+            ngx_log_error(NGX_LOG_ERR, log, 0,
+                    "client init, parse peer %V error", peer);
+            goto clear;
+        }
+
+        ++p;
+        plen = last - p;
+
+        n = ngx_atoi(p, plen);
+        if (n < 1 || n > 65535) {
+            ngx_log_error(NGX_LOG_ERR, log, 0,
+                    "client init, parse peer %V error", peer);
+            goto clear;
+        }
+        ci->port = n;
+    }
+
+    /* parse local */
+    if (local && local->len) {
+        ci->local = ngx_pcalloc(ci->pool, sizeof(ngx_addr_t));
+        if (ci->local == NULL) {
+            goto clear;
+        }
+
+        rc = ngx_parse_addr_port(ci->pool, ci->local, peer->data, peer->len);
+        if (rc != NGX_OK) {
+            ngx_log_error(NGX_LOG_ERR, log, 0, "invalid local address \"%V\"",
+                    local);
+            goto clear;
+        }
+
+        ci->local->name.data = ngx_pcalloc(ci->pool, sizeof(local->len));
+        if (ci->local->name.data == NULL) {
+            goto clear;
+        }
+        ngx_memcpy(ci->local->name.data, local->data, local->len);
+        ci->local->name.len = local->len;
+    }
+
+    /* set default */
+    ci->connect_timeout = 3000;
+    ci->send_timeout = 60000;
+    ci->reconnect = 1000;
+    ci->max_retries = -1;
+
+    ci->type = udp ? SOCK_DGRAM : SOCK_STREAM;
+
+    ci->postpone_output = 1460;
+
+    ci->dynamic_resolver = 1;
+
+    ci->log_error = NGX_LOG_ERR;
+
+    return ci;
+
+clear:
+    if (pool) {
+        ngx_destroy_pool(pool);
+    }
+
+    return NULL;
+}
+
+void
+ngx_client_set_handler(ngx_client_session_t *s)
+{
+    s->ci->recv = ngx_client_test_reading;
+    s->ci->send = ngx_client_write_handler;
+    s->ci->closed = ngx_client_close;
+}
+
+ngx_client_session_t *
+ngx_client_connect(ngx_client_init_t *ci, ngx_log_t *log)
+{
+    ngx_client_session_t       *s;
 
     /* create session */
-    s = ngx_client_create_session(ci);
+    s = ngx_client_create_session(ci, log);
     if (s == NULL) {
         return NULL;
     }
 
-    /* set connect timer */
-    s->connect_event.data = s;
-    s->connect_event.log = s->log;
-    s->connect_event.handler = ngx_client_connect_timeout;
-
-    ngx_add_timer(&s->connect_event, s->ci->connect_timeout);
+    ngx_log_debug1(NGX_LOG_DEBUG_CORE, &ci->log, 0, "nginx client connect %V",
+            &s->ci->server);
 
     /* start connect */
-    ngx_event_resolver_start_resolver(&s->host, ngx_client_connect_server, s);
+    if (s->ci->dynamic_resolver) {
+        ngx_dynamic_resolver_start_resolver(&s->ci->server,
+                ngx_client_connect_server, s);
+    } else {
+        ngx_event_resolver_start_resolver(&s->ci->server,
+                ngx_client_resolver_server, s);
+    }
 
     return s;
+}
+
+void
+ngx_client_reconnect(ngx_client_session_t *s)
+{
+    if (s->ci->max_retries != -1 &&
+            s->peer.tries >= (ngx_uint_t) s->ci->max_retries)
+    {
+        ngx_client_close(s);
+        return;
+    }
+
+    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
+            "nginx client reconnect");
+
+    if (s->ci->reconnect) {
+        s->ci->reconnect_event.handler = ngx_client_reconnect_handler;
+        s->ci->reconnect_event.data = s;
+        s->ci->reconnect_event.log = s->connection->log;
+
+        ngx_add_timer(&s->ci->reconnect_event, s->ci->reconnect);
+    }
 }
 
 ngx_int_t
@@ -763,7 +884,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
     }
 
     if (wev->active) { /* if NGX_OK, del write notification */
-        if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
+        if (ngx_del_event(wev, NGX_WRITE_EVENT, 0) != NGX_OK) {
             goto error;
         }
     }
@@ -772,6 +893,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
 
 again:
     ngx_add_timer(c->write, s->ci->send_timeout);
+    ngx_log_error(NGX_LOG_INFO, c->log, 0, "client write again");
     if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
         goto error;
     }
@@ -785,85 +907,64 @@ error:
 }
 
 ngx_int_t
-ngx_client_read(ngx_client_session_t *s, ngx_chain_t *in)
+ngx_client_read(ngx_client_session_t *s, ngx_buf_t *b)
 {
     ngx_connection_t           *c;
-    ngx_buf_t                  *b;
     ngx_int_t                   n;
-    size_t                      bytes = 0;
 
-    if (s == NULL || in == NULL || in->buf == NULL) {
+    if (s == NULL || b == NULL) {
         return NGX_ERROR;
+    }
+
+    if (b->last == b->end) {
+        return NGX_DECLINED;
     }
 
     c = s->peer.connection;
 
-    b = in->buf;
+    n = c->recv(c, b->last, b->end - b->last);
 
-    for (;;) {
-        n = c->recv(c, b->last, b->end - b->last);
+    if (n == NGX_ERROR || n == 0) {
+        return NGX_ERROR;
+    }
 
-        if (n == NGX_ERROR || n == 0) {
-            ngx_client_reconnect(s);
+    if (n == NGX_AGAIN) {
+        if (ngx_handle_read_event(c->read, 0) != NGX_OK) {
             return NGX_ERROR;
         }
 
-        if (n == NGX_AGAIN) {
-            if (ngx_handle_read_event(c->read, 0) != NGX_OK) {
-                ngx_client_reconnect(s);
-            }
-
-            return bytes;
-        }
-
-        b->last += n;
-        bytes += n;
-
-        if (b->end == b->last) { /* buf full */
-            return bytes;
-        }
-    }
-}
-
-void
-ngx_client_set_handler(ngx_client_session_t *s)
-{
-    if (s->ci->recv == NULL) {
-        s->ci->recv = ngx_client_test_reading;
+        return NGX_AGAIN;
     }
 
-    if (s->ci->send == NULL) {
-        s->ci->send = ngx_client_write_handler;
-    }
+    b->last += n;
+
+    return n;
 }
 
 void
 ngx_client_close(ngx_client_session_t *s)
 {
-    ngx_connection_t           *c;
     ngx_pool_t                 *pool;
 
     if (s->closed) {
         return;
     }
 
+    if (s->ci->reconnect_event.timer_set) {
+        ngx_del_timer(&s->ci->reconnect_event);
+    }
+
     s->closed = 1;
-    c = s->peer.connection;
 
-    ngx_log_error(NGX_LOG_INFO, s->log, 0, "nginx client close");
+    ngx_log_debug0(NGX_LOG_DEBUG_CORE, s->connection->log, 0,
+            "nginx client close");
 
-    if (c && !c->destroyed) {
-        ngx_client_close_connection(c);
-    }
-
-    if (s->connect_event.timer_set) {
-        ngx_del_timer(&s->connect_event);
-    }
+    ngx_client_close_connection(s);
 
     if (s->ci->closed) {
         s->ci->closed(s);
     }
 
     pool = s->pool;
-    ngx_destroy_pool(pool); /* s alloc from pool */
+    ngx_destroy_pool(pool); /* s and s->ci alloc from pool */
 }

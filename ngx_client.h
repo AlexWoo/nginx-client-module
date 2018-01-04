@@ -21,17 +21,22 @@ typedef void (* ngx_client_closed_pt)(ngx_client_session_t *s);
 
 
 typedef struct {
-    ngx_str_t                   local;
-    ngx_str_t                   server;
+    ngx_pool_t                 *pool;
+    ngx_log_t                   log;
 
-    ngx_msec_t                  connect_timeout;
-    ngx_msec_t                  send_timeout;
-    ngx_uint_t                  max_retries;    /* 0 for retry all the time */
+    ngx_addr_t                 *local;
+    ngx_str_t                   server;
+    in_port_t                   port;
+
+    ngx_msec_t                  connect_timeout;/* connect timeout */
+    ngx_msec_t                  send_timeout;   /* send timeout */
+    ngx_msec_t                  reconnect;      /* reconnect interval */
+    ngx_int_t                   max_retries;    /* -1 for retry all the time */
+
+    ngx_event_t                 reconnect_event;
 
     int                         type;           /* SOCK_STREAM or SOCK_DGRAM */
     int                         recvbuf;
-
-    ngx_log_t                  *log;
 
     size_t                      postpone_output;
 
@@ -39,10 +44,11 @@ typedef struct {
     size_t                      limit_rate_after;
     size_t                      sendfile_max_chunk;
 
+    unsigned                    dynamic_resolver:1;
     unsigned                    cached:1;
 
                                 /* ngx_connection_log_error_e */
-    unsigned                    log_error:2;
+    unsigned                    log_error:3;
 
     /* callback */
     ngx_client_connect_pt       connected;  /* connect or reconnect successd */
@@ -57,16 +63,9 @@ struct ngx_client_session_s {
 
     ngx_connection_t           *connection;
 
-    ngx_str_t                   host;
-    in_port_t                   port;
-
     ngx_pool_t                 *pool;
-    ngx_log_t                  *log;
-    ngx_event_t                 connect_event;
 
     void                       *data;
-
-    void                       *request;
 
     ngx_chain_t                *out;
 
@@ -75,22 +74,25 @@ struct ngx_client_session_s {
     size_t                      limit_rate;
     size_t                      limit_rate_after;
 
-    unsigned                    closed:1;
     unsigned                    connected:1;
+    unsigned                    closed:1;
 
     /* configured */
     ngx_client_init_t          *ci;
 };
 
-void ngx_client_reconnect(ngx_client_session_t *s);
+ngx_client_init_t *ngx_client_init(ngx_str_t *peer, ngx_str_t *local,
+        ngx_flag_t udp, ngx_log_t *log);
 
-ngx_client_session_t *ngx_client_connect(ngx_client_init_t *ci);
+void ngx_client_set_handler(ngx_client_session_t *s);
+
+ngx_client_session_t *ngx_client_connect(ngx_client_init_t *ci, ngx_log_t *log);
+
+void ngx_client_reconnect(ngx_client_session_t *s);
 
 ngx_int_t ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out);
 
-ngx_int_t ngx_client_read(ngx_client_session_t *s, ngx_chain_t *in);
-
-void ngx_client_set_handler(ngx_client_session_t *s);
+ngx_int_t ngx_client_read(ngx_client_session_t *s, ngx_buf_t *b);
 
 void ngx_client_close(ngx_client_session_t *s);
 
