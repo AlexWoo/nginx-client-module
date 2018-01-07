@@ -102,6 +102,8 @@ ngx_client_test_connect(ngx_connection_t *c)
 static void
 ngx_client_connected(ngx_client_session_t *s)
 {
+    ngx_event_t                *wev;
+
     if (ngx_client_test_connect(s->connection) != NGX_OK) {
         ngx_client_reconnect(s);
         return;
@@ -109,6 +111,21 @@ ngx_client_connected(ngx_client_session_t *s)
 
     ngx_log_debug0(NGX_LOG_DEBUG_CORE, s->connection->log, 0,
             "nginx client connected");
+
+    wev = s->connection->write;
+
+    if (wev->timedout) { /* rev or wev timedout */
+        ngx_log_error(NGX_LOG_ERR, s->connection->log, NGX_ETIMEDOUT,
+                "server timed out");
+        s->connection->timedout = 1;
+        ngx_client_reconnect(s);
+
+        return;
+    }
+
+    if (wev->timer_set) {
+        ngx_del_timer(wev);
+    }
 
     s->connected = 1;
     s->peer.tries = 0;
@@ -244,15 +261,6 @@ ngx_client_handler(ngx_event_t *ev)
 
     c = ev->data;
     s = c->data;
-
-    if (ev->timedout) { /* rev or wev timedout */
-        ngx_log_error(NGX_LOG_ERR, s->connection->log, NGX_ETIMEDOUT,
-                "server timed out");
-        c->timedout = 1;
-        ngx_client_reconnect(s);
-
-        return;
-    }
 
     /* async connect successd */
     if (!s->connected) {
@@ -924,7 +932,11 @@ ngx_client_read(ngx_client_session_t *s, ngx_buf_t *b)
 
     n = c->recv(c, b->last, b->end - b->last);
 
-    if (n == NGX_ERROR || n == 0) {
+    if (n == 0) {
+        return 0;
+    }
+
+    if (n == NGX_ERROR) {
         return NGX_ERROR;
     }
 

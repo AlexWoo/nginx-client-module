@@ -1,7 +1,10 @@
-#include <ngx_config.h>
-#include <ngx_core.h>
-#include <ngx_http.h>
-#include "../ngx_client.h"
+/*
+ * Copyright (C) AlexWoo(Wu Jie) wj19840501@gmail.com
+ */
+
+
+#include "ngx_http_client.h"
+#include "ngx_rbuf.h"
 
 
 static char *ngx_http_client_test(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
@@ -52,129 +55,109 @@ ngx_module_t  ngx_http_client_test_module = {
 
 
 static void
-ngx_http_client_test_connected(ngx_client_session_t *s)
+ngx_http_client_test_recv_body(void *request, ngx_http_request_t *hcr)
 {
-    ngx_buf_t                  *b;
-    size_t                      len;
-    ngx_chain_t                 out;
-    ngx_http_request_t         *r;
-    ngx_event_t                *wev;
+    ngx_http_request_t             *r;
+    ngx_http_client_ctx_t          *ctx;
+    ngx_chain_t                    *cl = NULL;
+    ngx_chain_t                   **ll;
+    ngx_int_t                       rc;
 
-    ngx_log_error(NGX_LOG_ERR, s->log, 0, "client connected");
+    r = request;
+    ctx = hcr->ctx[0];
 
-    r = s->data;
-    wev = s->peer.connection->write;
+    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+            "http client test recv body");
 
-    len = sizeof("nginx client test\n") - 1;
-    b = ngx_create_temp_buf(s->pool, len);
+    rc = ngx_http_client_read_body(hcr, &cl, 4096);
 
-    if (b == NULL) {
-        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
-        return;
+    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+            "http client test recv body, rc %i %i, %O",
+            rc, ngx_errno, ctx->rbytes);
+
+    if (rc == 0) {
+        goto done;
     }
 
-    b->last = ngx_copy(b->last, "nginx client test\n", len);
-    b->last_buf = 1;
+    if (rc == NGX_ERROR) {
+        goto done;
+    }
 
-    out.buf = b;
-    out.next = NULL;
+    if (rc == NGX_DONE) {
+        for (ll = &cl; (*ll)->next; ll = &(*ll)->next);
 
-    ngx_client_write(s, &out);
+        (*ll)->buf->last_buf = 1;
 
-    ngx_handle_write_event(wev, 0);
+        rc = NGX_OK;
+    }
+
+    ngx_http_output_filter(r, cl);
+    goto ok;
+
+done:
+    ngx_http_finalize_request(r, rc);
+    ngx_http_client_free_request(hcr, 1);
+
+ok:
+    ngx_http_client_recycle_body(cl);
+    ngx_http_run_posted_requests(r->connection);
 }
 
 static void
-ngx_http_client_test_recv(ngx_client_session_t *s)
+ngx_http_client_test_recv(void *request, ngx_http_request_t *hcr)
 {
-    ngx_buf_t                  *b;
-    ngx_int_t                   n;
-    ngx_connection_t           *c;
-    ngx_str_t                   recv;
-    ngx_http_request_t         *r;
+    ngx_http_request_t             *r;
+    ngx_http_client_ctx_t          *ctx;
+    static ngx_str_t                content_type = ngx_string("Content-Type");
+    static ngx_str_t                connection = ngx_string("Connection");
+    static ngx_str_t                unknown = ngx_string("Unknown");
+    ngx_str_t                      *ct, *con;
 
-    c = s->peer.connection;
-    r = s->data;
+    r = request;
+    ctx = hcr->ctx[0];
 
-    b = ngx_create_temp_buf(s->pool, 4096);
-    if (b == NULL) {
-        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
-        return;
+    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "http client test recv");
+
+    r->headers_out.status = 200;
+
+    ctx->read_handler = ngx_http_client_test_recv_body;
+
+    ngx_http_send_header(r);
+
+    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+            "status_code: %ui   http_version: %ui",
+            ngx_http_client_status_code(hcr),
+            ngx_http_client_http_version(hcr));
+
+    ct = ngx_http_client_header_in(hcr, &content_type);
+    con = ngx_http_client_header_in(hcr, &connection);
+    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "Content-Type: %V", ct);
+    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "Connection: %V", con);
+
+    if (ngx_http_client_header_in(hcr, &unknown) == NULL) {
+        ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "no header Unknown");
     }
 
-    n = c->recv(c, b->pos, b->end - b->last);
-    if (n == NGX_AGAIN) {
-        ngx_log_error(NGX_LOG_ERR, s->log, 0, "client recv NGX_AGAIN");
-        return;
-    }
-
-    if (n == NGX_ERROR || n == 0) {
-        ngx_log_error(NGX_LOG_ERR, s->log, 0, "client recv NGX_ERROR");
-        ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
-        ngx_client_close(s);
-        return;
-    }
-
-    b->last += n;
-
-    recv.data = b->pos;
-    recv.len = b->last - b->pos;
-
-    ngx_log_error(NGX_LOG_ERR, s->log, 0, "client recv %d: %V, %z",
-            n, &recv, recv.len);
-
-    ngx_http_finalize_request(r, NGX_HTTP_FORBIDDEN);
-    ngx_client_close(s);
-    return;
+    ngx_http_client_test_recv_body(request, hcr);
 }
 
-static void
-ngx_http_client_test_send(ngx_client_session_t *s)
-{
-    ngx_log_error(NGX_LOG_ERR, s->log, 0, "client send");
-}
-
-static void
-ngx_http_client_test_closed(ngx_client_session_t *s)
-{
-    ngx_log_error(NGX_LOG_ERR, s->log, 0, "client closed");
-}
 
 static ngx_int_t
 ngx_http_client_test_handler(ngx_http_request_t *r)
 {
-    ngx_client_session_t           *s;
-    ngx_client_init_t              *ci;
-    ngx_str_t                       echo;
+    ngx_http_request_t         *hcr;
+    static ngx_str_t            request_url = ngx_string("http://127.0.0.1/");
 
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "client test handler");
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+            "http client test handler");
 
-    if (ngx_http_arg(r, (u_char *) "echo", sizeof("echo") - 1, &echo)
-            != NGX_OK)
-    {
-        return NGX_HTTP_BAD_REQUEST;
+    hcr = ngx_http_client_create_request(&request_url, NGX_HTTP_CLIENT_GET,
+            NGX_HTTP_CLIENT_VERSION_11, NULL, r->connection->log,
+            ngx_http_client_test_recv, NULL);
+
+    if (ngx_http_client_send(hcr, NULL, r, r->connection->log) != NGX_OK) {
+        return NGX_HTTP_BAD_GATEWAY;
     }
-
-    ci = ngx_pcalloc(r->pool, sizeof(ngx_client_init_t));
-    ci->server.len = sizeof("127.0.0.1:10000") - 1;
-    ci->server.data = ngx_pcalloc(r->pool, ci->server.len);
-    ngx_memcpy(ci->server.data, "127.0.0.1:10000", ci->server.len);
-    //ci->timeout = 2000;
-    //ci->max_retries = 3;
-    //ci->type = SOCK_STREAM;
-    //ci->recvbuf = 4096;
-    ci->log = r->connection->log;
-
-    ci->connected = ngx_http_client_test_connected;
-    ci->recv = ngx_http_client_test_recv;
-    ci->send = ngx_http_client_test_send;
-    ci->closed = ngx_http_client_test_closed;
-
-    s = ngx_client_connect(ci);
-    if (s == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
-    s->data = r;
 
     ++r->count;
 
@@ -185,7 +168,7 @@ ngx_http_client_test_handler(ngx_http_request_t *r)
 static char *
 ngx_http_client_test(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 {
-    ngx_http_core_loc_conf_t  *clcf;
+    ngx_http_core_loc_conf_t   *clcf;
 
     clcf = ngx_http_conf_get_module_loc_conf(cf, ngx_http_core_module);
     clcf->handler = ngx_http_client_test_handler;
