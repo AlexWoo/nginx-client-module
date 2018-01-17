@@ -530,17 +530,6 @@ ngx_http_client_accept_set(ngx_http_request_t *r, ngx_str_t *name,
 static void
 ngx_http_client_close_request(ngx_http_request_t *r)
 {
-    ngx_http_client_ctx_t      *ctx;
-    ngx_client_session_t       *s;
-
-    ctx = r->ctx[0];
-    s = ctx->session;
-
-    ngx_client_set_handler(s);
-
-    ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-            "http client, close request");
-
     ngx_destroy_pool(r->pool);
 }
 
@@ -1502,6 +1491,7 @@ ngx_http_client_free_request(ngx_http_request_t *hcr, ngx_flag_t closed)
     s = ctx->session;
 
     ngx_http_client_close_request(hcr);
+    s->ci->closed = NULL;
 
     if (closed) {
         ngx_client_close(s);

@@ -9,6 +9,8 @@
 #include "ngx_dynamic_resolver.h"
 
 
+#define NGX_CLIENT_DISCARD_BUFFER_SIZE  4096
+
 typedef struct {
     ngx_client_session_t       *session;
 } ngx_client_log_ctx_t;
@@ -135,126 +137,74 @@ ngx_client_connected(ngx_client_session_t *s)
     }
 }
 
-void
-ngx_client_test_reading(ngx_client_session_t *s)
+static void
+ngx_client_write_handler(ngx_event_t *ev)
 {
-    int                n;
-    char               buf[1];
-    ngx_err_t          err;
-    ngx_event_t       *rev;
-    ngx_connection_t  *c;
+    ngx_connection_t           *c;
+    ngx_client_session_t       *s;
+    ngx_int_t                   n;
 
-    c = s->peer.connection;
-    rev = c->read;
+    c = ev->data;
+    s = c->data;
 
-    ngx_log_debug0(NGX_LOG_DEBUG_CORE, s->connection->log, 0,
-            "nginx client test reading");
+    if (c->destroyed) {
+        return;
+    }
 
-#if (NGX_HAVE_KQUEUE)
+    if (!s->connected) {
+        ngx_client_connected(s);
 
-    if (ngx_event_flags & NGX_USE_KQUEUE_EVENT) {
+        return;
+    }
 
-        if (!rev->pending_eof) {
+    if (s->ci->send) {
+        s->ci->send(s);
+
+        return;
+    }
+
+    /* write data buffered in s->out */
+    if (s->out == NULL) {
+        return;
+    }
+
+    n = ngx_client_write(s, NULL);
+    if (n == NGX_ERROR) {
+        ngx_client_close(s);
+    }
+}
+
+static void
+ngx_client_read_discarded(ngx_client_session_t *s)
+{
+    ngx_int_t                   n;
+    ngx_buf_t                   b;
+    u_char                      buffer[NGX_CLIENT_DISCARD_BUFFER_SIZE];
+
+    b.start = buffer;
+    b.end = buffer + NGX_CLIENT_DISCARD_BUFFER_SIZE;
+
+    for (;;) {
+        b.pos = b.last = b.start;
+
+        n = ngx_client_read(s, &b);
+
+        if (n == NGX_ERROR || n == 0) {
+            ngx_log_error(NGX_LOG_ERR, s->connection->log, ngx_errno,
+                    "nginx client read discard error");
+            ngx_client_close(s);
+
             return;
         }
 
-        rev->eof = 1;
-        c->error = 1;
-        err = rev->kq_errno;
-
-        goto closed;
-    }
-
-#endif
-
-#if (NGX_HAVE_EPOLLRDHUP)
-
-    if ((ngx_event_flags & NGX_USE_EPOLL_EVENT) && rev->pending_eof) {
-        socklen_t  len;
-
-        rev->eof = 1;
-        c->error = 1;
-
-        err = 0;
-        len = sizeof(ngx_err_t);
-
-        /*
-         * BSDs and Linux return 0 and set a pending error in err
-         * Solaris returns -1 and sets errno
-         */
-
-        if (getsockopt(c->fd, SOL_SOCKET, SO_ERROR, (void *) &err, &len)
-                == -1)
-        {
-            err = ngx_socket_errno;
-        }
-
-        goto closed;
-    }
-
-#endif
-
-    n = recv(c->fd, buf, 1, MSG_PEEK);
-
-    if (n == 0) {
-        rev->eof = 1;
-        c->error = 1;
-        err = 0;
-
-        goto closed;
-
-    } else if (n == -1) {
-        err = ngx_socket_errno;
-
-        if (err != NGX_EAGAIN) {
-            rev->eof = 1;
-            c->error = 1;
-
-            goto error;
+        if (n == NGX_AGAIN) {
+            return;
         }
     }
-
-    /* aio does not call this handler */
-
-    if ((ngx_event_flags & NGX_USE_LEVEL_EVENT) && rev->active) {
-
-        if (ngx_del_event(rev, NGX_READ_EVENT, 0) != NGX_OK) {
-            goto error;
-        }
-    }
-
-    return;
-
-closed:
-
-    ngx_log_error(NGX_LOG_INFO, c->log, err, "nginx client test reading close");
-
-    ngx_client_close(s);
-
-    return;
-
-error:
-
-    if (err) {
-        rev->error = 1;
-    }
-
-    ngx_log_error(NGX_LOG_INFO, c->log, err, "nginx client test reading error");
-
-    ngx_client_reconnect(s);
-
-    return;
 }
 
 static void
-ngx_client_write_handler(ngx_client_session_t *s)
-{
-    /* write data buffered in s->out */
-    ngx_client_write(s, NULL);
-}
-
-static void
-ngx_client_handler(ngx_event_t *ev)
+ngx_client_read_handler(ngx_event_t *ev)
 {
     ngx_connection_t           *c;
     ngx_client_session_t       *s;
@@ -262,21 +212,21 @@ ngx_client_handler(ngx_event_t *ev)
     c = ev->data;
     s = c->data;
 
-    /* async connect successd */
+    if (c->destroyed) {
+        return;
+    }
+
     if (!s->connected) {
         ngx_client_connected(s);
 
         return;
     }
 
-    if (ev->write) {
-        if (s->ci->send) {
-            s->ci->send(s);
-        }
+    if (s->ci->recv) {
+        s->ci->recv(s);
     } else {
-        if (s->ci->recv) {
-            s->ci->recv(s);
-        }
+        /* read and drop */
+        ngx_client_read_discarded(s);
     }
 }
 
@@ -338,8 +288,8 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
 
     c->data = s;
 
-    c->write->handler = ngx_client_handler;
-    c->read->handler = ngx_client_handler;
+    c->write->handler = ngx_client_write_handler;
+    c->read->handler = ngx_client_read_handler;
 
     if (rc == NGX_AGAIN) {
         ngx_add_timer(c->write, s->ci->connect_timeout);
@@ -390,8 +340,6 @@ ngx_client_create_session(ngx_client_init_t *ci, ngx_log_t *log)
     s->pool = ci->pool;
 
     s->ci = ci;
-
-    ngx_client_set_handler(s);
 
     s->peer.log = &s->ci->log;
     s->peer.get = ngx_client_get_peer;
@@ -561,7 +509,7 @@ ngx_client_init(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
     ci->connect_timeout = 3000;
     ci->send_timeout = 60000;
     ci->reconnect = 1000;
-    ci->max_retries = -1;
+    ci->max_retries = 0;
 
     ci->type = udp ? SOCK_DGRAM : SOCK_STREAM;
 
@@ -579,14 +527,6 @@ clear:
     }
 
     return NULL;
-}
-
-void
-ngx_client_set_handler(ngx_client_session_t *s)
-{
-    s->ci->recv = ngx_client_test_reading;
-    s->ci->send = ngx_client_write_handler;
-    s->ci->closed = ngx_client_close;
 }
 
 ngx_client_session_t *
@@ -651,7 +591,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
     wev = c->write;
 
     if (c->error) {
-        goto error;
+        return NGX_ERROR;
     }
 
     size = 0;
@@ -690,7 +630,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
                           cl->buf->file_last);
 
             ngx_debug_point();
-            goto error;
+            return NGX_ERROR;
         }
 #endif
 
@@ -714,7 +654,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
     for (ln = out; ln; ln = ln->next) {
         cl = ngx_alloc_chain_link(s->pool);
         if (cl == NULL) {
-            goto error;
+            return NGX_ERROR;
         }
 
         cl->buf = ln->buf;
@@ -746,7 +686,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
                           cl->buf->file_last);
 
             ngx_debug_point();
-            goto error;
+            return NGX_ERROR;
         }
 #endif
 
@@ -802,7 +742,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
 
         ngx_debug_point();
 
-        goto error;
+        return NGX_ERROR;
     }
 
     if (s->limit_rate) {
@@ -843,7 +783,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
 
     if (chain == NGX_CHAIN_ERROR) {
         c->error = 1;
-        goto error;
+        return NGX_ERROR;
     }
 
     if (s->limit_rate) {
@@ -888,30 +828,22 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
     s->out = chain;
 
     if (chain) {
-        goto again;
+        ngx_add_timer(c->write, s->ci->send_timeout);
+        ngx_log_error(NGX_LOG_INFO, c->log, 0, "client write again");
+        if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
+            return NGX_ERROR;
+        }
+
+        return NGX_AGAIN;
     }
 
     if (wev->active) { /* if NGX_OK, del write notification */
         if (ngx_del_event(wev, NGX_WRITE_EVENT, 0) != NGX_OK) {
-            goto error;
+            return NGX_ERROR;
         }
     }
 
     return NGX_OK;
-
-again:
-    ngx_add_timer(c->write, s->ci->send_timeout);
-    ngx_log_error(NGX_LOG_INFO, c->log, 0, "client write again");
-    if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
-        goto error;
-    }
-
-    return NGX_AGAIN;
-
-error:
-    ngx_client_reconnect(s);
-
-    return NGX_ERROR;
 }
 
 ngx_int_t
@@ -949,6 +881,7 @@ ngx_client_read(ngx_client_session_t *s, ngx_buf_t *b)
     }
 
     b->last += n;
+    s->recv += n;
 
     return n;
 }

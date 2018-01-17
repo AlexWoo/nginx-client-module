@@ -69,6 +69,8 @@ struct ngx_client_session_s {
 
     ngx_chain_t                *out;
 
+    size_t                      recv;       /* recv bytes */
+
     time_t                      start_sec;
 
     size_t                      limit_rate;
