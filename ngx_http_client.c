@@ -1487,19 +1487,6 @@ ngx_http_client_read_body(ngx_http_request_t *hcr, ngx_chain_t **in,
 }
 
 void
-ngx_http_client_recycle_body(ngx_chain_t *cl)
-{
-    ngx_chain_t                *l;
-
-    l = cl;
-    while (l) {
-        ngx_put_chainbuf(l);
-        l = cl->next;
-        cl = l;
-    }
-}
-
-void
 ngx_http_client_finalize_request(ngx_http_request_t *hcr, ngx_flag_t closed)
 {
     ngx_http_client_ctx_t      *ctx;

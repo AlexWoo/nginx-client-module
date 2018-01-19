@@ -99,7 +99,7 @@ done:
     ngx_http_client_finalize_request(hcr, 1);
 
 ok:
-    ngx_http_client_recycle_body(cl);
+    ngx_put_chainbufs(cl);
     ngx_http_run_posted_requests(r->connection);
 }
 
