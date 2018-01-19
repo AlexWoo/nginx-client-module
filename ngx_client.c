@@ -889,6 +889,7 @@ ngx_client_read(ngx_client_session_t *s, ngx_buf_t *b)
 void
 ngx_client_close(ngx_client_session_t *s)
 {
+    ngx_client_closed_pt        closed;
     ngx_pool_t                 *pool;
 
     if (s->closed) {
@@ -907,7 +908,10 @@ ngx_client_close(ngx_client_session_t *s)
     ngx_client_close_connection(s);
 
     if (s->ci->closed) {
-        s->ci->closed(s);
+        closed = s->ci->closed;
+        s->ci->closed = NULL;
+
+        closed(s);
     }
 
     pool = s->pool;

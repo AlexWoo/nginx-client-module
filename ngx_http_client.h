@@ -132,10 +132,11 @@ ngx_str_t *ngx_http_client_header_in(ngx_http_request_t *hcr, ngx_str_t *key);
 ngx_int_t ngx_http_client_write_body(ngx_http_request_t *hcr, ngx_chain_t *out);
 
 ngx_int_t ngx_http_client_read_body(ngx_http_request_t *hcr, ngx_chain_t **in,
-          size_t size);
+        size_t size);
 
 void ngx_http_client_recycle_body(ngx_chain_t *cl);
 
-void ngx_http_client_free_request(ngx_http_request_t *hcr, ngx_flag_t closed);
+void ngx_http_client_finalize_request(ngx_http_request_t *hcr,
+        ngx_flag_t closed);
 
 #endif

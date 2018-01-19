@@ -96,7 +96,7 @@ ngx_http_client_test_recv_body(void *request, ngx_http_request_t *hcr)
 
 done:
     ngx_http_finalize_request(r, rc);
-    ngx_http_client_free_request(hcr, 1);
+    ngx_http_client_finalize_request(hcr, 1);
 
 ok:
     ngx_http_client_recycle_body(cl);
