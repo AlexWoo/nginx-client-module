@@ -539,6 +539,8 @@ ngx_http_client_free_request(ngx_http_request_t *hcr)
         return;
     }
 
+    ctx = hcr->ctx[0];
+    s = ctx->session;
     cln = hcr->cleanup;
     hcr->cleanup = NULL;
 
@@ -549,9 +551,6 @@ ngx_http_client_free_request(ngx_http_request_t *hcr)
 
         cln = cln->next;
     }
-
-    ctx = hcr->ctx[0];
-    s = ctx->session;
 
     if (s) {
         s->ci->recv = NULL;
@@ -1040,8 +1039,9 @@ ngx_http_client_create_request_buf(ngx_client_session_t *s)
         len += 2;
     } else {
         /* " uri_escape " */
-        len += 1 + ngx_escape_uri(NULL, ctx->url.uri_with_args.data,
-               ctx->url.uri_with_args.len, NGX_ESCAPE_URI_COMPONENT) + 1;
+        len += 1 + ctx->url.uri_with_args.len +
+               2 * ngx_escape_uri(NULL, ctx->url.uri_with_args.data,
+               ctx->url.uri_with_args.len, NGX_ESCAPE_URI) + 1;
     }
 
     /* version */
@@ -1080,7 +1080,7 @@ ngx_http_client_create_request_buf(ngx_client_session_t *s)
         b->last = (u_char *) ngx_escape_uri(b->last,
                              ctx->url.uri_with_args.data,
                              ctx->url.uri_with_args.len,
-                             NGX_ESCAPE_URI_COMPONENT);
+                             NGX_ESCAPE_URI);
     }
     *b->last++ = ' ';
 
@@ -1328,6 +1328,7 @@ ngx_http_client_create_request(ngx_str_t *request_url, ngx_uint_t method,
         goto destroy;
     }
     r->ctx[0] = ctx;
+    r->main = r;
 
     r->method = method > NGX_HTTP_CLIENT_TRACE ? NGX_HTTP_CLIENT_GET : method;
 
@@ -1396,13 +1397,17 @@ ngx_http_client_send(ngx_http_request_t *hcr, ngx_client_session_t *s,
     } else {
         ci = s->ci;
 
+        ci->connected = ngx_http_client_send_header;
         ci->closed = ngx_http_client_close_handler;
 
         s->data = hcr;
         ctx->session = s;
         ctx->request = request;
+        hcr->connection = s->connection;
 
-        ngx_http_client_send_header(s);
+        if (s->connected) {
+            ngx_http_client_send_header(s);
+        }
     }
 
     return NGX_OK;
