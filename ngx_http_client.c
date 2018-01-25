@@ -1033,16 +1033,20 @@ ngx_http_client_create_request_buf(ngx_client_session_t *s)
     /* method */
     len = ngx_http_client_method[r->method].len + 1;  /* "GET " */
 
-    /* path + args + fragment */
-    if (ctx->url.path.len == 0) {
-        /* no path, set "/ " as default */
-        len += 2;
-    } else {
-        /* " uri_escape " */
-        len += 1 + ctx->url.uri_with_args.len +
-               2 * ngx_escape_uri(NULL, ctx->url.uri_with_args.data,
-               ctx->url.uri_with_args.len, NGX_ESCAPE_URI) + 1;
+    /* path + args */
+    ++len; /* "/" */
+    if (ctx->url.path.len) {
+        /* "path" */
+        len += ctx->url.path.len + 2 * ngx_escape_uri(NULL, ctx->url.path.data,
+               ctx->url.path.len, NGX_ESCAPE_URI);
     }
+
+    if (ctx->url.args.len) {
+        /* "?args" */
+        len += ctx->url.args.len + 2 * ngx_escape_uri(NULL, ctx->url.args.data,
+               ctx->url.args.len, NGX_ESCAPE_URI);
+    }
+    ++len; /* " " */
 
     /* version */
     len += sizeof("HTTP/1.x") - 1 + sizeof(CRLF) - 1;
@@ -1074,13 +1078,17 @@ ngx_http_client_create_request_buf(ngx_client_session_t *s)
                          ngx_http_client_method[r->method].len);
     *b->last++ = ' ';
 
-    /* path + args + fragment */
+    /* path + args */
     *b->last++ = '/';
     if (ctx->url.path.len) {
-        b->last = (u_char *) ngx_escape_uri(b->last,
-                             ctx->url.uri_with_args.data,
-                             ctx->url.uri_with_args.len,
-                             NGX_ESCAPE_URI);
+        b->last = (u_char *) ngx_escape_uri(b->last, ctx->url.path.data,
+                             ctx->url.path.len, NGX_ESCAPE_URI);
+    }
+
+    if (ctx->url.args.len) {
+        *b->last++ = '?';
+        b->last = (u_char *) ngx_escape_uri(b->last, ctx->url.args.data,
+                             ctx->url.args.len, NGX_ESCAPE_URI);
     }
     *b->last++ = ' ';
 
