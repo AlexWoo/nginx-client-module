@@ -1239,8 +1239,9 @@ ngx_http_client_body_chunked_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
         size_t size)
 {
     ngx_http_client_ctx_t      *ctx;
-    ngx_chain_t               **ll, *cl = NULL;
+    ngx_chain_t               **ll, *cl = NULL, *l;
     ngx_int_t                   rc;
+    size_t                      len;
 
     ctx = hcr->ctx[0];
 
@@ -1255,8 +1256,6 @@ ngx_http_client_body_chunked_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
     }
 
     /* NGX_AGAIN */
-    ngx_log_error(NGX_LOG_ERR, hcr->connection->log, 0,
-            "http client, body filter return %i", rc);
 
     for (ll = in; *ll; ll = &(*ll)->next);
 
@@ -1264,22 +1263,64 @@ ngx_http_client_body_chunked_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
 
         rc = ngx_http_parse_chunked(hcr, cl->buf, &ctx->chunked);
 
-        ngx_log_error(NGX_LOG_ERR, hcr->connection->log, 0,
-                "http client, parse chunked %p %p-%p %p",
-                cl->buf->start, cl->buf->pos, cl->buf->last, cl->buf->end);
+        ngx_log_debug7(NGX_LOG_DEBUG_CORE, hcr->connection->log, 0,
+                "http client, parse chunked %p %p-%p %p, rc: %d, %O %O",
+                cl->buf->start, cl->buf->pos, cl->buf->last, cl->buf->end,
+                rc, ctx->chunked.size, ctx->chunked.length);
 
         if (rc == NGX_OK) {
+
             /* a chunk has been parsed successfully */
-            cl = cl->next;
-            if (cl == NULL) {
-                return NGX_OK;
+
+            for (;;) {
+                if (*ll == NULL) {
+                    *ll = ngx_get_chainbuf(size, 1);
+                }
+
+                len = ngx_min(ctx->chunked.size, cl->buf->last
+                                                - cl->buf->pos);
+                if ((*ll)->buf->end - (*ll)->buf->last >= (long) len) {
+                    (*ll)->buf->last = ngx_cpymem((*ll)->buf->last,
+                                                  cl->buf->pos, len);
+                    cl->buf->pos += len;
+                    ctx->chunked.size -= len;
+
+                    goto done;
+                }
+
+                len = (*ll)->buf->end - (*ll)->buf->last;
+                (*ll)->buf->last = ngx_cpymem((*ll)->buf->last,
+                                              cl->buf->pos, len);
+                cl->buf->pos += len;
+                ctx->chunked.size -= len;
+
+                ll = &(*ll)->next;
             }
+
+done:
+            ngx_log_debug7(NGX_LOG_DEBUG_CORE, hcr->connection->log, 0,
+                    "http client, parse done %p %p-%p %p, rc: %d, %O %O",
+                    cl->buf->start, cl->buf->pos, cl->buf->last, cl->buf->end,
+                    rc, ctx->chunked.size, ctx->chunked.length);
+
+            if (cl->buf->pos == cl->buf->last) {
+                l = cl;
+                cl = cl->next;
+                ngx_put_chainbuf(l);
+
+                if (cl == NULL) {
+                    return NGX_OK;
+                }
+            }
+
             continue;
         }
 
         if (rc == NGX_AGAIN) {
-            ngx_put_chainbuf(cl);
+            l = cl;
             cl = cl->next;
+            ngx_put_chainbuf(l);
+
             if (cl == NULL) {
                 return NGX_AGAIN;
             }
