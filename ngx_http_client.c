@@ -1251,8 +1251,8 @@ ngx_http_client_body_chunked_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
 
     rc = ngx_http_client_body_read_filter(hcr, &cl, size);
 
-    if (rc == NGX_ERROR) {
-        return NGX_ERROR;
+    if (rc == NGX_ERROR || rc == 0) {
+        return rc;
     }
 
     /* NGX_AGAIN */
