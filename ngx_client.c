@@ -905,14 +905,14 @@ ngx_client_close(ngx_client_session_t *s)
     ngx_log_debug0(NGX_LOG_DEBUG_CORE, s->connection->log, 0,
             "nginx client close");
 
-    ngx_client_close_connection(s);
-
     if (s->ci->closed) {
         closed = s->ci->closed;
         s->ci->closed = NULL;
 
         closed(s);
     }
+
+    ngx_client_close_connection(s);
 
     pool = s->pool;
     ngx_destroy_pool(pool); /* s and s->ci alloc from pool */
