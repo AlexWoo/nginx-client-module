@@ -420,7 +420,7 @@ ngx_client_init(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
         goto clear;
     }
 
-    pool = ngx_create_pool(4096, log);
+    pool = ngx_create_pool(4096, ngx_cycle->log);
     if (pool == NULL) {
         return NULL;
     }
