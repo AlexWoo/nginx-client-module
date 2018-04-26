@@ -1355,7 +1355,7 @@ ngx_http_client_create_request(ngx_str_t *request_url, ngx_uint_t method,
         return NULL;
     }
 
-    pool = ngx_create_pool(4096, log);
+    pool = ngx_create_pool(4096, ngx_cycle->log);
     if (pool == NULL) {
         return NULL;
     }
