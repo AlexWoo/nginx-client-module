@@ -1043,6 +1043,7 @@ ngx_http_client_create_request_buf(ngx_client_session_t *s)
 
     if (ctx->url.args.len) {
         /* "?args" */
+        ++len;
         len += ctx->url.args.len + 2 * ngx_escape_uri(NULL, ctx->url.args.data,
                ctx->url.args.len, NGX_ESCAPE_URI);
     }
