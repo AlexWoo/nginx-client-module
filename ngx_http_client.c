@@ -1109,6 +1109,8 @@ ngx_http_client_create_request_buf(ngx_client_session_t *s)
         *b->last++ = ':'; *b->last++ = ' ';
         b->last = ngx_cpymem(b->last, h->value.data, h->value.len);
         *b->last++ = CR; *b->last++ = LF;
+
+        ++h;
     }
 
     /* Request Headers end */
