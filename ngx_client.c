@@ -553,9 +553,8 @@ ngx_client_connect(ngx_client_init_t *ci, ngx_log_t *log)
 ngx_int_t
 ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
 {
-    off_t                       size, sent, nsent, limit;
+    off_t                       size;
     ngx_uint_t                  last, flush, sync;
-    ngx_msec_t                  delay;
     ngx_chain_t                *cl, *ln, **ll, *chain;
     ngx_connection_t           *c;
     ngx_event_t                *wev;
@@ -693,10 +692,6 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
         return NGX_OK;
     }
 
-    if (c->write->delayed) {
-        return NGX_AGAIN;
-    }
-
     if (size == 0 && !(last && c->need_last_buf)) {
         if (last || flush || sync) {
             for (cl = s->out; cl; /* void */) {
@@ -718,38 +713,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
         return NGX_ERROR;
     }
 
-    if (s->limit_rate) {
-        if (s->limit_rate_after == 0) {
-            s->limit_rate_after = s->ci->limit_rate_after;
-        }
-
-        limit = (off_t) s->limit_rate * (ngx_time() - s->start_sec + 1)
-                - (c->sent - s->limit_rate_after);
-
-        if (limit <= 0) {
-            c->write->delayed = 1;
-            delay = (ngx_msec_t) (- limit * 1000 / s->limit_rate + 1);
-            ngx_add_timer(c->write, delay);
-
-            return NGX_AGAIN;
-        }
-
-        if (s->ci->sendfile_max_chunk
-            && (off_t) s->ci->sendfile_max_chunk < limit)
-        {
-            limit = s->ci->sendfile_max_chunk;
-        }
-
-    } else {
-        limit = s->ci->sendfile_max_chunk;
-    }
-
-    sent = c->sent;
-
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
-                   "nginx client write limit %O", limit);
-
-    chain = c->send_chain(c, s->out, limit);
+    chain = c->send_chain(c, s->out, 0);
 
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "nginx client write %p", chain);
@@ -757,39 +721,6 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
     if (chain == NGX_CHAIN_ERROR) {
         c->error = 1;
         return NGX_ERROR;
-    }
-
-    if (s->limit_rate) {
-
-        nsent = c->sent;
-
-        if (s->limit_rate_after) {
-
-            sent -= s->limit_rate_after;
-            if (sent < 0) {
-                sent = 0;
-            }
-
-            nsent -= s->limit_rate_after;
-            if (nsent < 0) {
-                nsent = 0;
-            }
-        }
-
-        delay = (ngx_msec_t) ((nsent - sent) * 1000 / s->limit_rate);
-
-        if (delay > 0) {
-            limit = 0;
-            c->write->delayed = 1;
-            ngx_add_timer(c->write, delay);
-        }
-    }
-
-    if (limit && c->write->ready
-        && c->sent - sent >= limit - (off_t) (2 * ngx_pagesize))
-    {
-        c->write->delayed = 1;
-        ngx_add_timer(c->write, 1);
     }
 
     for (cl = s->out; cl && cl != chain; /* void */) {

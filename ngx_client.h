@@ -36,10 +36,6 @@ typedef struct {
 
     size_t                      postpone_output;
 
-    size_t                      limit_rate;
-    size_t                      limit_rate_after;
-    size_t                      sendfile_max_chunk;
-
     unsigned                    dynamic_resolver:1;
     unsigned                    cached:1;
 
@@ -68,11 +64,6 @@ struct ngx_client_session_s {
     ngx_chain_t                *out;
 
     size_t                      recv;       /* recv bytes */
-
-    time_t                      start_sec;
-
-    size_t                      limit_rate;
-    size_t                      limit_rate_after;
 
     unsigned                    connected:1;
     unsigned                    closed:1;
