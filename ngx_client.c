@@ -7,6 +7,7 @@
 #include "ngx_client.h"
 #include "ngx_event_resolver.h"
 #include "ngx_dynamic_resolver.h"
+#include "ngx_poold.h"
 
 
 #define NGX_CLIENT_DISCARD_BUFFER_SIZE  4096
@@ -277,7 +278,7 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     c = s->connection;
 
     if (c->pool == NULL) {
-        c->pool = ngx_create_pool(128, &s->ci->log);
+        c->pool = NGX_CREATE_POOL(128, &s->ci->log);
         if (c->pool == NULL) {
             ngx_client_reconnect(s);
             return;
@@ -366,7 +367,7 @@ ngx_client_create_session(ngx_client_init_t *ci, ngx_log_t *log)
     return s;
 
 clear:
-    ngx_destroy_pool(ci->pool);
+    NGX_DESTROY_POOL(ci->pool);
 
     return NULL;
 }
@@ -392,7 +393,7 @@ ngx_client_close_connection(ngx_client_session_t *s)
 
     pool = c->pool;
     ngx_close_connection(c);
-    ngx_destroy_pool(pool);
+    NGX_DESTROY_POOL(pool);
 }
 
 static void
@@ -431,7 +432,7 @@ ngx_client_init(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
         goto clear;
     }
 
-    pool = ngx_create_pool(4096, ngx_cycle->log);
+    pool = NGX_CREATE_POOL(4096, ngx_cycle->log);
     if (pool == NULL) {
         return NULL;
     }
@@ -538,7 +539,7 @@ ngx_client_init(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
 
 clear:
     if (pool) {
-        ngx_destroy_pool(pool);
+        NGX_DESTROY_POOL(pool);
     }
 
     return NULL;
@@ -938,5 +939,5 @@ ngx_client_close(ngx_client_session_t *s)
     ngx_client_close_connection(s);
 
     pool = s->pool;
-    ngx_destroy_pool(pool); /* s and s->ci alloc from pool */
+    NGX_DESTROY_POOL(pool); /* s and s->ci alloc from pool */
 }

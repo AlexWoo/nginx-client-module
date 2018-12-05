@@ -5,6 +5,7 @@
 
 #include "ngx_http_client.h"
 #include "ngx_rbuf.h"
+#include "ngx_poold.h"
 
 
 static void *ngx_http_client_module_create_conf(ngx_cycle_t *cycle);
@@ -562,7 +563,7 @@ ngx_http_client_free_request(ngx_http_request_t *hcr)
     pool = hcr->pool;
     hcr->pool = NULL;
 
-    ngx_destroy_pool(pool);
+    NGX_DESTROY_POOL(pool);
 }
 
 static void
@@ -1358,7 +1359,7 @@ ngx_http_client_create_request(ngx_str_t *request_url, ngx_uint_t method,
         return NULL;
     }
 
-    pool = ngx_create_pool(4096, ngx_cycle->log);
+    pool = NGX_CREATE_POOL(4096, ngx_cycle->log);
     if (pool == NULL) {
         return NULL;
     }
@@ -1411,7 +1412,7 @@ ngx_http_client_create_request(ngx_str_t *request_url, ngx_uint_t method,
 
 destroy:
     if (pool) {
-        ngx_destroy_pool(r->pool);
+        NGX_DESTROY_POOL(r->pool);
     }
 
     return NULL;
