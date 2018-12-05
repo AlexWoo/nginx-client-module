@@ -50,6 +50,8 @@ typedef struct {
                                 /* ngx_connection_log_error_e */
     unsigned                    log_error:3;
 
+    ngx_client_session_t       *session;
+
     /* callback */
     ngx_client_connect_pt       connected;  /* connect or reconnect successd */
     ngx_client_recv_pt          recv;       /* recv msg from peer */

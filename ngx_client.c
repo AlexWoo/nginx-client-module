@@ -11,9 +11,15 @@
 
 #define NGX_CLIENT_DISCARD_BUFFER_SIZE  4096
 
-typedef struct {
-    ngx_client_session_t       *session;
-} ngx_client_log_ctx_t;
+
+/*
+ * stage:
+ *      create client
+ *      resolving
+ *      connecting to server
+ *      connected
+ *      close
+ */
 
 
 static u_char *
@@ -21,7 +27,7 @@ ngx_client_log_error(ngx_log_t *log, u_char *buf, size_t len)
 {
     u_char                     *p;
     ngx_client_session_t       *s;
-    ngx_client_log_ctx_t       *ctx;
+    ngx_client_init_t          *ci;
 
     if (log->action) {
         p = ngx_snprintf(buf, len, " while %s", log->action);
@@ -29,11 +35,17 @@ ngx_client_log_error(ngx_log_t *log, u_char *buf, size_t len)
         buf = p;
     }
 
-    ctx = log->data;
-    s = ctx->session;
+    ci = log->data;
+    s = ci->session;
 
-    p = ngx_snprintf(buf, len, ", server ip: %V, server: %V, session: %p",
-            &s->connection->addr_text, &s->ci->server, s);
+    if (s && s->connection) {
+        p = ngx_snprintf(buf, len, ", server ip: %V",
+                &s->connection->addr_text);
+        len -= p - buf;
+        buf = p;
+    }
+
+    p = ngx_snprintf(buf, len, ", server: %V, csession: %p", &ci->server, ci);
     len -= p - buf;
     buf = p;
 
@@ -110,6 +122,8 @@ ngx_client_connected(ngx_client_session_t *s)
         ngx_client_reconnect(s);
         return;
     }
+
+    s->ci->log.action = NULL;
 
     ngx_log_debug0(NGX_LOG_DEBUG_CORE, s->connection->log, 0,
             "nginx client connected");
@@ -236,7 +250,6 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     ngx_client_session_t       *s;
     ngx_connection_t           *c;
     ngx_int_t                   rc;
-    ngx_client_log_ctx_t       *ctx;
 
     s = data;
 
@@ -245,6 +258,8 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     s->peer.sockaddr = sa;
     s->peer.socklen = socklen;
     s->peer.name = &s->ci->server;
+
+    s->ci->log.action = "connecting to server";
 
     rc = ngx_event_connect_peer(&s->peer);
     if (rc != NGX_OK && rc != NGX_AGAIN) {
@@ -263,13 +278,6 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
         }
     }
 
-    ctx = ngx_pcalloc(c->pool, sizeof(ngx_client_log_ctx_t));
-    if (ctx == NULL) {
-        ngx_client_reconnect(s);
-        return;
-    }
-    ctx->session = s;
-
     c->addr_text.data = ngx_pcalloc(c->pool, NGX_SOCKADDR_STRLEN);
     if (c->addr_text.data == NULL) {
         ngx_client_reconnect(s);
@@ -282,9 +290,6 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
             "nginx client connect server, rc: %i", rc);
 
     c->log->connection = c->number;
-    c->log->handler = ngx_client_log_error;
-    c->log->data = ctx;
-    c->log->action = NULL;
 
     c->data = s;
 
@@ -349,6 +354,8 @@ ngx_client_create_session(ngx_client_init_t *ci, ngx_log_t *log)
     s->peer.rcvbuf = ci->recvbuf;
     s->peer.cached = ci->cached;
     s->peer.log_error = ci->log_error;
+
+    ci->session = s;
 
     return s;
 
@@ -431,7 +438,13 @@ ngx_client_init(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
     }
     ci->pool = pool;
 
+    // ci->log.connection not set, should set when connection established
     ci->log = ngx_cycle->new_log;
+    ci->log.handler = ngx_client_log_error;
+    ci->log.data = ci;
+    ci->log.action = "create client";
+
+    ci->log_error = NGX_LOG_INFO;
 
     /* parse remote */
     last = peer->data + peer->len;
@@ -517,8 +530,6 @@ ngx_client_init(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
 
     ci->dynamic_resolver = 1;
 
-    ci->log_error = NGX_LOG_ERR;
-
     return ci;
 
 clear:
@@ -539,6 +550,8 @@ ngx_client_connect(ngx_client_init_t *ci, ngx_log_t *log)
     if (s == NULL) {
         return NULL;
     }
+
+    ci->log.action = "resolving";
 
     ngx_log_debug1(NGX_LOG_DEBUG_CORE, &ci->log, 0, "nginx client connect %V",
             &s->ci->server);
@@ -895,6 +908,8 @@ ngx_client_close(ngx_client_session_t *s)
     if (s->closed) {
         return;
     }
+
+    s->ci->log.action = "close";
 
     if (s->ci->reconnect_event.timer_set) {
         ngx_del_timer(&s->ci->reconnect_event);
