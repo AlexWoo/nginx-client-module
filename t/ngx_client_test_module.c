@@ -166,10 +166,9 @@ ngx_client_test_handler(ngx_http_request_t *r)
     s->client_recv = ngx_client_test_recv;
     s->client_send = ngx_client_test_send;
     s->client_closed = ngx_client_test_closed;
+    s->data = r;
 
     ngx_client_connect(s, r->connection->log);
-
-    s->data = r;
 
     ++r->count;
 
