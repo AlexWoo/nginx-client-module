@@ -165,6 +165,9 @@ ngx_client_write_handler(ngx_event_t *ev)
         return;
     }
 
+    ngx_log_debug0(NGX_LOG_DEBUG_CORE, s->connection->log, 0,
+            "nginx client write handler");
+
     if (!s->connected) {
         ngx_client_connected(s);
 
@@ -229,6 +232,9 @@ ngx_client_read_handler(ngx_event_t *ev)
     if (c->destroyed) {
         return;
     }
+
+    ngx_log_debug0(NGX_LOG_DEBUG_CORE, s->connection->log, 0,
+            "nginx client read handler");
 
     if (!s->connected) {
         ngx_client_connected(s);
@@ -398,9 +404,7 @@ ngx_client_reconnect_handler(ngx_event_t *ev)
 
     ++s->peer.tries;
 
-    if (s->peer.connection) {
-        ngx_client_close_connection(s);
-    }
+    s->ci->log.action = "resolving";
 
     if (s->ci->dynamic_resolver) {
         ngx_dynamic_resolver_start_resolver(&s->ci->server,
@@ -581,10 +585,14 @@ ngx_client_reconnect(ngx_client_session_t *s)
     ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
             "nginx client reconnect");
 
+    if (s->peer.connection) {
+        ngx_client_close_connection(s);
+    }
+
     if (s->ci->reconnect) {
         s->ci->reconnect_event.handler = ngx_client_reconnect_handler;
         s->ci->reconnect_event.data = s;
-        s->ci->reconnect_event.log = s->connection->log;
+        s->ci->reconnect_event.log = &s->ci->log;
 
         ngx_add_timer(&s->ci->reconnect_event, s->ci->reconnect);
     }
