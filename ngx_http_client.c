@@ -1246,6 +1246,7 @@ ngx_http_client_body_chunked_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
     ngx_chain_t               **ll, *cl = NULL, *l;
     ngx_int_t                   rc;
     size_t                      len;
+    ngx_int_t                   n = 0;
 
     ctx = hcr->ctx[0];
 
@@ -1289,6 +1290,8 @@ ngx_http_client_body_chunked_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
                     cl->buf->pos += len;
                     ctx->chunked.size -= len;
 
+                    n += len;
+
                     goto done;
                 }
 
@@ -1297,6 +1300,8 @@ ngx_http_client_body_chunked_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
                                               cl->buf->pos, len);
                 cl->buf->pos += len;
                 ctx->chunked.size -= len;
+
+                n += len;
 
                 ll = &(*ll)->next;
             }
@@ -1313,7 +1318,7 @@ done:
                 ngx_put_chainbuf(l);
 
                 if (cl == NULL) {
-                    return NGX_OK;
+                    return n;
                 }
             }
 
