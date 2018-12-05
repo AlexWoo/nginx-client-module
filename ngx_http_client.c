@@ -554,9 +554,9 @@ ngx_http_client_free_request(ngx_http_request_t *hcr)
     }
 
     if (s) {
-        s->ci->recv = NULL;
-        s->ci->send = NULL;
-        s->ci->closed = NULL;
+        s->client_recv = NULL;
+        s->client_send = NULL;
+        s->client_closed = NULL;
         s->out = NULL;
     }
 
@@ -753,7 +753,7 @@ ngx_http_client_process_header(ngx_client_session_t *s)
         goto error;
     }
 
-    s->ci->recv = ngx_http_client_read_handler;
+    s->client_recv = ngx_http_client_read_handler;
 
     if (rev->timer_set) {
         ngx_del_timer(rev);
@@ -841,7 +841,7 @@ ngx_http_client_process_status_line(ngx_client_session_t *s)
     ngx_memcpy(ctx->headers_in.status_line.data, ctx->status.start,
                ctx->headers_in.status_line.len);
 
-    s->ci->recv = ngx_http_client_process_header;
+    s->client_recv = ngx_http_client_process_header;
     return ngx_http_client_process_header(s);
 }
 
@@ -914,7 +914,7 @@ ngx_http_client_wait_response_handler(ngx_client_session_t *s)
         return;
     }
 
-    s->ci->recv = ngx_http_client_process_status_line;
+    s->client_recv = ngx_http_client_process_status_line;
     return ngx_http_client_process_status_line(s);
 }
 
@@ -939,7 +939,7 @@ ngx_http_client_reinit(ngx_client_session_t *s)
     ctx->length = 0;
     ctx->chain = NULL;
 
-    s->ci->recv = ngx_http_client_wait_response_handler;
+    s->client_recv = ngx_http_client_wait_response_handler;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
             "http client, reinit");
@@ -1427,7 +1427,6 @@ ngx_int_t
 ngx_http_client_send(ngx_http_request_t *hcr, ngx_client_session_t *s,
         void *request, ngx_log_t *log)
 {
-    ngx_client_init_t          *ci;
     ngx_http_client_ctx_t      *ctx;
 
     if (hcr == NULL) {
@@ -1438,25 +1437,24 @@ ngx_http_client_send(ngx_http_request_t *hcr, ngx_client_session_t *s,
     ctx = hcr->ctx[0];
 
     if (s == NULL) {
-        ci = ngx_client_init(&ctx->url.host, NULL, 0, log);
-        ci->port = ngx_request_port(&ctx->url.scheme, &ctx->url.port);
-
-        ci->connected = ngx_http_client_send_header;
-        ci->closed = ngx_http_client_close_handler;
-
-        s = ngx_client_connect(ci, log);
+        s = ngx_client_create(&ctx->url.host, NULL, 0, log);
         if (s == NULL) {
             return NGX_ERROR;
         }
+
+        s->port = ngx_request_port(&ctx->url.scheme, &ctx->url.port);
+
+        s->client_connected = ngx_http_client_send_header;
+        s->client_closed = ngx_http_client_close_handler;
+
+        ngx_client_connect(s, log);
 
         s->data = hcr;
         ctx->session = s;
         ctx->request = request;
     } else {
-        ci = s->ci;
-
-        ci->connected = ngx_http_client_send_header;
-        ci->closed = ngx_http_client_close_handler;
+        s->client_connected = ngx_http_client_send_header;
+        s->client_closed = ngx_http_client_close_handler;
 
         s->data = hcr;
         ctx->session = s;

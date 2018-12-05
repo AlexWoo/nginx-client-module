@@ -20,13 +20,21 @@ typedef void (* ngx_client_send_pt)(ngx_client_session_t *s);
 typedef void (* ngx_client_closed_pt)(ngx_client_session_t *s);
 
 
-typedef struct {
+struct ngx_client_session_s {
+    ngx_peer_connection_t       peer;
+    ngx_str_t                   server;
+    in_port_t                   port;
+
+    ngx_connection_t           *connection;
+
     ngx_pool_t                 *pool;
     ngx_log_t                   log;
 
-    ngx_addr_t                 *local;
-    ngx_str_t                   server;
-    in_port_t                   port;
+    void                       *data;
+
+    ngx_chain_t                *out;
+
+    size_t                      recv;       /* recv bytes */
 
     ngx_msec_t                  connect_timeout;/* connect timeout */
     ngx_msec_t                  send_timeout;   /* send timeout */
@@ -37,47 +45,21 @@ typedef struct {
     size_t                      postpone_output;
 
     unsigned                    dynamic_resolver:1;
-    unsigned                    cached:1;
-
-                                /* ngx_connection_log_error_e */
-    unsigned                    log_error:3;
-
-    ngx_client_session_t       *session;
-
-    /* callback */
-    ngx_client_connect_pt       connected;  /* connect or reconnect successd */
-    ngx_client_recv_pt          recv;       /* recv msg from peer */
-    ngx_client_send_pt          send;       /* send msg to peer */
-    ngx_client_closed_pt        closed;     /* finalize connection */
-} ngx_client_init_t;
-
-
-struct ngx_client_session_s {
-    ngx_peer_connection_t       peer;
-
-    ngx_connection_t           *connection;
-
-    ngx_pool_t                 *pool;
-
-    void                       *data;
-
-    ngx_chain_t                *out;
-
-    size_t                      recv;       /* recv bytes */
 
     unsigned                    connected:1;
     unsigned                    closed:1;
 
-    /* configured */
-    ngx_client_init_t          *ci;
+    /* callback */
+    ngx_client_connect_pt       client_connected; /* connect successd */
+    ngx_client_recv_pt          client_recv;      /* recv msg from peer */
+    ngx_client_send_pt          client_send;      /* send msg to peer */
+    ngx_client_closed_pt        client_closed;    /* finalize connection */
 };
 
-ngx_client_init_t *ngx_client_init(ngx_str_t *peer, ngx_str_t *local,
+ngx_client_session_t *ngx_client_create(ngx_str_t *peer, ngx_str_t *local,
         ngx_flag_t udp, ngx_log_t *log);
 
-void ngx_client_set_handler(ngx_client_session_t *s);
-
-ngx_client_session_t *ngx_client_connect(ngx_client_init_t *ci, ngx_log_t *log);
+void ngx_client_connect(ngx_client_session_t *s, ngx_log_t *log);
 
 ngx_int_t ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out);
 
