@@ -165,8 +165,6 @@ ngx_client_test_handler(ngx_http_request_t *r)
     }
 
     //ci->dynamic_resolver = 0;
-    ci->connect_timeout = 1000;
-    ci->max_retries = 1;
     //ci->recvbuf = 4096;
 
     ci->connected = ngx_client_test_connected;

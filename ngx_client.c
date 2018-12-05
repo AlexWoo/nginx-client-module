@@ -120,7 +120,7 @@ ngx_client_connected(ngx_client_session_t *s)
     ngx_event_t                *wev;
 
     if (ngx_client_test_connect(s->connection) != NGX_OK) {
-        ngx_client_reconnect(s);
+        ngx_client_close(s);
         return;
     }
 
@@ -135,7 +135,8 @@ ngx_client_connected(ngx_client_session_t *s)
         ngx_log_error(NGX_LOG_ERR, s->connection->log, NGX_ETIMEDOUT,
                 "server timed out");
         s->connection->timedout = 1;
-        ngx_client_reconnect(s);
+
+        ngx_client_close(s);
 
         return;
     }
@@ -280,15 +281,13 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     if (c->pool == NULL) {
         c->pool = NGX_CREATE_POOL(128, &s->ci->log);
         if (c->pool == NULL) {
-            ngx_client_reconnect(s);
-            return;
+            goto failed;
         }
     }
 
     c->addr_text.data = ngx_pcalloc(c->pool, NGX_SOCKADDR_STRLEN);
     if (c->addr_text.data == NULL) {
-        ngx_client_reconnect(s);
-        return;
+        goto failed;
     }
     c->addr_text.len = ngx_sock_ntop(sa, socklen, c->addr_text.data,
                                      NGX_SOCKADDR_STRLEN, 1);
@@ -315,7 +314,7 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     return;
 
 failed:
-    ngx_client_reconnect(s);
+    ngx_client_close(s);
 }
 
 static void
@@ -330,7 +329,7 @@ ngx_client_resolver_server(void *data, ngx_resolver_addr_t *addrs,
     if (naddrs == 0) {
         ngx_log_error(NGX_LOG_ERR, &s->ci->log, ngx_errno,
                 "nginx client resolver failed");
-        ngx_client_reconnect(s);
+        ngx_client_close(s);
         return;
     }
 
@@ -394,26 +393,6 @@ ngx_client_close_connection(ngx_client_session_t *s)
     pool = c->pool;
     ngx_close_connection(c);
     NGX_DESTROY_POOL(pool);
-}
-
-static void
-ngx_client_reconnect_handler(ngx_event_t *ev)
-{
-    ngx_client_session_t       *s;
-
-    s = ev->data;
-
-    ++s->peer.tries;
-
-    s->ci->log.action = "resolving";
-
-    if (s->ci->dynamic_resolver) {
-        ngx_dynamic_resolver_start_resolver(&s->ci->server,
-                ngx_client_connect_server, s);
-    } else {
-        ngx_event_resolver_start_resolver(&s->ci->server,
-                ngx_client_resolver_server, s);
-    }
 }
 
 
@@ -526,8 +505,6 @@ ngx_client_init(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
     /* set default */
     ci->connect_timeout = 3000;
     ci->send_timeout = 60000;
-    ci->reconnect = 1000;
-    ci->max_retries = 0;
 
     ci->type = udp ? SOCK_DGRAM : SOCK_STREAM;
 
@@ -571,32 +548,6 @@ ngx_client_connect(ngx_client_init_t *ci, ngx_log_t *log)
     }
 
     return s;
-}
-
-void
-ngx_client_reconnect(ngx_client_session_t *s)
-{
-    if (s->ci->max_retries != -1 &&
-            s->peer.tries >= (ngx_uint_t) s->ci->max_retries)
-    {
-        ngx_client_close(s);
-        return;
-    }
-
-    ngx_log_error(NGX_LOG_INFO, s->connection->log, 0,
-            "nginx client reconnect");
-
-    if (s->peer.connection) {
-        ngx_client_close_connection(s);
-    }
-
-    if (s->ci->reconnect) {
-        s->ci->reconnect_event.handler = ngx_client_reconnect_handler;
-        s->ci->reconnect_event.data = s;
-        s->ci->reconnect_event.log = &s->ci->log;
-
-        ngx_add_timer(&s->ci->reconnect_event, s->ci->reconnect);
-    }
 }
 
 ngx_int_t
@@ -919,10 +870,6 @@ ngx_client_close(ngx_client_session_t *s)
     }
 
     s->ci->log.action = "close";
-
-    if (s->ci->reconnect_event.timer_set) {
-        ngx_del_timer(&s->ci->reconnect_event);
-    }
 
     s->closed = 1;
 

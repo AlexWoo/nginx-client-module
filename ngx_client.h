@@ -30,10 +30,6 @@ typedef struct {
 
     ngx_msec_t                  connect_timeout;/* connect timeout */
     ngx_msec_t                  send_timeout;   /* send timeout */
-    ngx_msec_t                  reconnect;      /* reconnect interval */
-    ngx_int_t                   max_retries;    /* -1 for retry all the time */
-
-    ngx_event_t                 reconnect_event;
 
     int                         type;           /* SOCK_STREAM or SOCK_DGRAM */
     int                         recvbuf;
@@ -91,8 +87,6 @@ ngx_client_init_t *ngx_client_init(ngx_str_t *peer, ngx_str_t *local,
 void ngx_client_set_handler(ngx_client_session_t *s);
 
 ngx_client_session_t *ngx_client_connect(ngx_client_init_t *ci, ngx_log_t *log);
-
-void ngx_client_reconnect(ngx_client_session_t *s);
 
 ngx_int_t ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out);
 
