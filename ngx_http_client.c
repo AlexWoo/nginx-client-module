@@ -1447,7 +1447,7 @@ ngx_http_client_send(ngx_http_request_t *hcr, ngx_client_session_t *s,
         s->client_connected = ngx_http_client_send_header;
         s->client_closed = ngx_http_client_close_handler;
 
-        ngx_client_connect(s, log);
+        ngx_client_connect(s);
 
         s->data = hcr;
         ctx->session = s;

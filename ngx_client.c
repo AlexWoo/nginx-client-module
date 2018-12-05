@@ -51,6 +51,7 @@ ngx_client_log_error(ngx_log_t *log, u_char *buf, size_t len)
     return p;
 }
 
+
 static ngx_int_t
 ngx_client_get_peer(ngx_peer_connection_t *pc, void *data)
 {
@@ -63,6 +64,7 @@ ngx_client_free_peer(ngx_peer_connection_t *pc, void *data,
         ngx_uint_t state)
 {
 }
+
 
 static ngx_int_t
 ngx_client_test_connect(ngx_connection_t *c)
@@ -112,6 +114,7 @@ ngx_client_test_connect(ngx_connection_t *c)
     return NGX_OK;
 }
 
+
 static void
 ngx_client_connected(ngx_client_session_t *s)
 {
@@ -150,6 +153,7 @@ ngx_client_connected(ngx_client_session_t *s)
         s->client_connected(s);
     }
 }
+
 
 static void
 ngx_client_write_handler(ngx_event_t *ev)
@@ -191,6 +195,7 @@ ngx_client_write_handler(ngx_event_t *ev)
     }
 }
 
+
 static void
 ngx_client_read_discarded(ngx_client_session_t *s)
 {
@@ -219,6 +224,7 @@ ngx_client_read_discarded(ngx_client_session_t *s)
         }
     }
 }
+
 
 static void
 ngx_client_read_handler(ngx_event_t *ev)
@@ -249,6 +255,7 @@ ngx_client_read_handler(ngx_event_t *ev)
         ngx_client_read_discarded(s);
     }
 }
+
 
 static void
 ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
@@ -320,6 +327,7 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
 failed:
     ngx_client_close(s);
 }
+
 
 static void
 ngx_client_resolver_server(void *data, ngx_resolver_addr_t *addrs,
@@ -500,7 +508,7 @@ clear:
 
 
 void
-ngx_client_connect(ngx_client_session_t *s, ngx_log_t *log)
+ngx_client_connect(ngx_client_session_t *s)
 {
     s->log.action = "resolving";
 
@@ -545,7 +553,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
     for (cl = s->out; cl; cl = cl->next) {
         ll = &cl->next;
 
-        ngx_log_debug7(NGX_LOG_DEBUG_EVENT, c->log, 0,
+        ngx_log_debug7(NGX_LOG_DEBUG_EVENT, &s->log, 0,
                        "nginx client write, write old buf t:%d f:%d %p, "
                        "pos %p, size: %z file: %O, size: %O",
                        cl->buf->temporary, cl->buf->in_file,
@@ -556,7 +564,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
 
 #if 1
         if (ngx_buf_size(cl->buf) == 0 && !ngx_buf_special(cl->buf)) {
-            ngx_log_error(NGX_LOG_ALERT, c->log, 0,
+            ngx_log_error(NGX_LOG_ALERT, &s->log, 0,
                           "nginx client write, zero size buf in writer "
                           "t:%d r:%d f:%d %p %p-%p %p %O-%O",
                           cl->buf->temporary,
@@ -601,7 +609,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
         *ll = cl;
         ll = &cl->next;
 
-        ngx_log_debug7(NGX_LOG_DEBUG_EVENT, c->log, 0,
+        ngx_log_debug7(NGX_LOG_DEBUG_EVENT, &s->log, 0,
                        "nginx client write, write new buf t:%d f:%d %p, "
                        "pos %p, size: %z file: %O, size: %O",
                        cl->buf->temporary, cl->buf->in_file,
@@ -612,7 +620,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
 
 #if 1
         if (ngx_buf_size(cl->buf) == 0 && !ngx_buf_special(cl->buf)) {
-            ngx_log_error(NGX_LOG_ALERT, c->log, 0,
+            ngx_log_error(NGX_LOG_ALERT, &s->log, 0,
                           "nginx client write, zero size buf in writer "
                           "t:%d r:%d f:%d %p %p-%p %p %O-%O",
                           cl->buf->temporary,
@@ -647,7 +655,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
 
     *ll = NULL;
 
-    ngx_log_debug3(NGX_LOG_DEBUG_HTTP, c->log, 0, "nginx client write, "
+    ngx_log_debug3(NGX_LOG_DEBUG_HTTP, &s->log, 0, "nginx client write, "
                    "http write filter: l:%ui f:%ui s:%O", last, flush, size);
 
     /*
@@ -673,7 +681,7 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
             return NGX_OK;
         }
 
-        ngx_log_error(NGX_LOG_ALERT, c->log, 0,
+        ngx_log_error(NGX_LOG_ALERT, &s->log, 0,
                       "nginx client write, the output chain is empty");
 
         ngx_debug_point();
@@ -683,11 +691,12 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
 
     chain = c->send_chain(c, s->out, 0);
 
-    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, &s->log, 0,
                    "nginx client write %p", chain);
 
     if (chain == NGX_CHAIN_ERROR) {
         c->error = 1;
+        ngx_log_error(NGX_LOG_ERR, &s->log, ngx_errno, "write error");
         return NGX_ERROR;
     }
 
@@ -701,7 +710,6 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
 
     if (chain) {
         ngx_add_timer(c->write, s->send_timeout);
-        ngx_log_error(NGX_LOG_INFO, c->log, 0, "client write again");
         if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
             return NGX_ERROR;
         }
@@ -738,10 +746,12 @@ ngx_client_read(ngx_client_session_t *s, ngx_buf_t *b)
     n = c->recv(c, b->last, b->end - b->last);
 
     if (n == 0) {
+        ngx_log_error(NGX_LOG_ERR, &s->log, ngx_errno, "server closed");
         return 0;
     }
 
     if (n == NGX_ERROR) {
+        ngx_log_error(NGX_LOG_ERR, &s->log, ngx_errno, "read error");
         return NGX_ERROR;
     }
 
