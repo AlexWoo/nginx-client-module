@@ -288,15 +288,9 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     }
     s->connection = s->peer.connection;
     c = s->connection;
+    c->pool = s->pool;
 
-    if (c->pool == NULL) {
-        c->pool = NGX_CREATE_POOL(128, &s->log);
-        if (c->pool == NULL) {
-            goto failed;
-        }
-    }
-
-    c->addr_text.data = ngx_pcalloc(c->pool, NGX_SOCKADDR_STRLEN);
+    c->addr_text.data = ngx_pcalloc(s->pool, NGX_SOCKADDR_STRLEN);
     if (c->addr_text.data == NULL) {
         goto failed;
     }
@@ -355,7 +349,6 @@ static void
 ngx_client_close_connection(ngx_client_session_t *s)
 {
     ngx_connection_t           *c;
-    ngx_pool_t                 *pool;
 
     c = s->connection;
 
@@ -370,9 +363,7 @@ ngx_client_close_connection(ngx_client_session_t *s)
     s->connection = NULL;
     c->destroyed = 1;
 
-    pool = c->pool;
     ngx_close_connection(c);
-    NGX_DESTROY_POOL(pool);
 }
 
 
