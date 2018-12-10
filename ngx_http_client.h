@@ -37,105 +37,59 @@
 typedef void (* ngx_http_client_handler_pt)(void *r, ngx_http_request_t *hcr);
 
 
-typedef struct {    /* for http response */
-    ngx_list_t                      headers;
+/* create and set http request */
 
-    ngx_uint_t                      http_version;
-    ngx_uint_t                      status_n;
-    ngx_str_t                       status_line;
+ngx_http_request_t *ngx_http_client_create(ngx_log_t *log,
+    ngx_uint_t method, ngx_str_t *url, ngx_keyval_t *headers,
+    ngx_http_client_handler_pt send_body, void *request);
 
-    ngx_table_elt_t                *status;
-    ngx_table_elt_t                *date;
-    ngx_table_elt_t                *server;
-    ngx_table_elt_t                *connection;
+void ngx_http_client_set_read_handler(ngx_http_request_t *r,
+    ngx_http_client_handler_pt read_handler);
 
-    ngx_table_elt_t                *expires;
-    ngx_table_elt_t                *etag;
-    ngx_table_elt_t                *x_accel_expires;
-    ngx_table_elt_t                *x_accel_redirect;
-    ngx_table_elt_t                *x_accel_limit_rate;
+void ngx_http_client_set_write_handler(ngx_http_request_t *r,
+    ngx_http_client_handler_pt write_handler);
 
-    ngx_table_elt_t                *content_type;
-    ngx_table_elt_t                *content_length;
+void ngx_http_client_set_version(ngx_http_request_t *r, ngx_uint_t version);
 
-    ngx_table_elt_t                *last_modified;
-    ngx_table_elt_t                *location;
-    ngx_table_elt_t                *accept_ranges;
-    ngx_table_elt_t                *www_authenticate;
-    ngx_table_elt_t                *transfer_encoding;
+void ngx_http_client_set_header_timeout(ngx_http_request_t *r,
+    ngx_msec_t timeout);
 
-#if (NGX_HTTP_GZIP)
-    ngx_table_elt_t                *content_encoding;
-#endif
+/* send http request */
 
-    off_t                           content_length_n;
+ngx_int_t ngx_http_client_send(ngx_http_request_t *r);
 
-    unsigned                        connection_type:2;
-    unsigned                        chunked:1;
-} ngx_http_client_headers_in_t;
+ngx_http_request_t *ngx_http_client_get(ngx_log_t *log, ngx_str_t *url,
+    ngx_keyval_t *headers, void *request);
+
+ngx_http_request_t *ngx_http_client_head(ngx_log_t *log, ngx_str_t *url,
+    ngx_keyval_t *headers, void *request);
+
+ngx_http_request_t *ngx_http_client_post(ngx_log_t *log, ngx_str_t *url,
+    ngx_keyval_t *headers, ngx_http_client_handler_pt send_body, void *request);
 
 
-typedef struct {
-    unsigned                        set_host;
-    unsigned                        set_user_agent;
-    unsigned                        set_connection;
-    unsigned                        set_accept;
-} ngx_http_client_headers_set_t;
+/* get response */
 
+ngx_uint_t ngx_http_client_http_version(ngx_http_request_t *r);
 
-typedef struct {
-    ngx_client_session_t           *session;
-    void                           *request;
+ngx_uint_t ngx_http_client_status_code(ngx_http_request_t *r);
 
-    /* Request */
-    ngx_keyval_t                   *headers;
+ngx_str_t *ngx_http_client_header_in(ngx_http_request_t *r, ngx_str_t *key);
 
-    ngx_request_url_t               url;
+ngx_int_t ngx_http_client_write_body(ngx_http_request_t *r, ngx_chain_t *out);
 
-    /* Response */
-    ngx_http_status_t               status;
-    ngx_http_chunked_t              chunked;
-    ngx_int_t                       length;
-
-    /* config */
-    ngx_msec_t                      server_header_timeout;
-    size_t                          server_header_buffer_size;
-
-    /* runtime */
-    off_t                           rbytes;     /* read bytes */
-    off_t                           wbytes;     /* write bytes */
-
-    ngx_chain_t                    *chain;
-
-    ngx_http_client_headers_in_t    headers_in;
-    ngx_http_client_headers_set_t   headers_set;
-
-    ngx_http_client_handler_pt      read_handler;
-    ngx_http_client_handler_pt      write_handler;
-} ngx_http_client_ctx_t;
-
-
-ngx_http_request_t *ngx_http_client_create_request(ngx_str_t *request_url,
-        ngx_uint_t method, ngx_uint_t http_version, ngx_keyval_t *headers,
-        ngx_log_t *log, ngx_http_client_handler_pt read_handler,
-        ngx_http_client_handler_pt write_handler);
-
-ngx_int_t ngx_http_client_send(ngx_http_request_t *hcr, ngx_client_session_t *s,
-        void *request, ngx_log_t *log);
-
-ngx_uint_t ngx_http_client_http_version(ngx_http_request_t *hcr);
-
-ngx_uint_t ngx_http_client_status_code(ngx_http_request_t *hcr);
-
-ngx_str_t *ngx_http_client_header_in(ngx_http_request_t *hcr, ngx_str_t *key);
-
-ngx_int_t ngx_http_client_write_body(ngx_http_request_t *hcr, ngx_chain_t *out);
-
-ngx_int_t ngx_http_client_read_body(ngx_http_request_t *hcr, ngx_chain_t **in,
+ngx_int_t ngx_http_client_read_body(ngx_http_request_t *r, ngx_chain_t **in,
         size_t size);
 
-void ngx_http_client_finalize_request(ngx_http_request_t *hcr,
-        ngx_flag_t closed);
+off_t ngx_http_client_rbytes(ngx_http_request_t *r);
 
+off_t ngx_http_client_wbytes(ngx_http_request_t *r);
+
+
+/* end request */
+
+void ngx_http_client_detach(ngx_http_request_t *r);
+
+void ngx_http_client_finalize_request(ngx_http_request_t *r, ngx_flag_t closed);
 
 #endif
