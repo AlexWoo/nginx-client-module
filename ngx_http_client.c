@@ -9,7 +9,7 @@
 
 
 static void *ngx_http_client_module_create_conf(ngx_cycle_t *cycle);
-static char *ngx_http_client_init_conf(ngx_cycle_t *cycle, void *conf);
+static char *ngx_http_client_module_init_conf(ngx_cycle_t *cycle, void *conf);
 
 static ngx_int_t ngx_http_client_process_header_line(ngx_http_request_t *r,
        ngx_table_elt_t *h, ngx_uint_t offset);
@@ -267,7 +267,7 @@ static ngx_command_t    ngx_http_client_commands[] = {
 static ngx_core_module_t    ngx_http_client_module_ctx = {
     ngx_string("http_client"),
     ngx_http_client_module_create_conf,
-    ngx_http_client_init_conf
+    ngx_http_client_module_init_conf
 };
 
 
@@ -302,7 +302,7 @@ ngx_http_client_module_create_conf(ngx_cycle_t *cycle)
 
 
 static char *
-ngx_http_client_init_conf(ngx_cycle_t *cycle, void *conf)
+ngx_http_client_module_init_conf(ngx_cycle_t *cycle, void *conf)
 {
     ngx_http_upstream_main_conf_t  *hccf = conf;
 
