@@ -669,7 +669,24 @@ ngx_http_client_close_handler(ngx_client_session_t *s)
     r = s->data;
 
     ngx_http_client_free_request(r);
-    ngx_client_close(s);
+}
+
+
+static void
+ngx_http_client_discarded_body(ngx_http_request_t *r)
+{
+    ngx_chain_t                *cl = NULL;
+    ngx_int_t                   rc;
+
+    rc = ngx_http_client_read_body(r, &cl, 4096);
+    if (cl) {
+        ngx_put_chainbufs(cl);
+    }
+
+    if (rc == 0 || rc == NGX_ERROR) { // http client close
+        ngx_http_client_finalize_request(r, 1);
+        return;
+    }
 }
 
 
@@ -684,8 +701,14 @@ ngx_http_client_read_handler(ngx_client_session_t *s)
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
             "http client, read handler");
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+            "http client, read handler");
 
-    ctx->read_handler(ctx->request, r);
+    if (ctx->request && ctx->read_handler) {
+        ctx->read_handler(ctx->request, r);
+    } else {
+        ngx_http_client_discarded_body(r);
+    }
 }
 
 
@@ -1210,7 +1233,7 @@ ngx_http_client_send_header(ngx_client_session_t *s)
     ngx_client_write(s, &out);
 
     /* user defined, for send body function callback */
-    if (ctx->write_handler) {
+    if (ctx->request && ctx->write_handler) {
         ctx->write_handler(ctx->request, r);
     }
 

@@ -7,7 +7,8 @@
 #include "ngx_rbuf.h"
 
 
-static char *ngx_http_client_test(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_client_test(ngx_conf_t *cf, ngx_command_t *cmd,
+       void *conf);
 
 
 static ngx_command_t  ngx_http_client_test_commands[] = {
@@ -90,15 +91,20 @@ ngx_http_client_test_recv_body(void *request, ngx_http_request_t *hcr)
     }
 
     ngx_http_output_filter(r, cl);
-    goto ok;
+
+    ngx_put_chainbufs(cl);
+    ngx_http_run_posted_requests(r->connection);
+
+    if (rc == NGX_AGAIN) {
+        return;
+    }
+
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "client detach");
+
+    ngx_http_client_detach(hcr);
 
 done:
     ngx_http_finalize_request(r, rc);
-    ngx_http_client_finalize_request(hcr, 1);
-
-ok:
-    ngx_put_chainbufs(cl);
-    ngx_http_run_posted_requests(r->connection);
 }
 
 static void
@@ -142,7 +148,7 @@ static ngx_int_t
 ngx_http_client_test_handler(ngx_http_request_t *r)
 {
     ngx_http_request_t         *hcr;
-    static ngx_str_t            request_url = ngx_string("http://127.0.0.1/");
+    static ngx_str_t   request_url = ngx_string("http://127.0.0.1/");
 
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "http client test handler");
