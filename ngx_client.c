@@ -423,7 +423,6 @@ ngx_client_get_peer(ngx_peer_connection_t *pc, void *data)
     c->log = pc->log;
     c->read->log = pc->log;
     c->write->log = pc->log;
-    c->pool->log = pc->log;
 
     pc->connection = c;
     pc->cached = 1;
@@ -668,6 +667,7 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     s->connection = s->peer.connection;
     c = s->connection;
     c->pool = s->pool;
+    c->pool->log = s->peer.log;
 
     c->addr_text.data = ngx_pcalloc(s->pool, NGX_SOCKADDR_STRLEN);
     if (c->addr_text.data == NULL) {

@@ -101,7 +101,8 @@ ngx_http_client_test_recv_body(void *request, ngx_http_request_t *hcr)
 
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "client detach");
 
-    ngx_http_client_detach(hcr);
+    //ngx_http_client_detach(hcr);
+    ngx_http_client_finalize_request(hcr, 0);
 
 done:
     ngx_http_finalize_request(r, rc);
@@ -148,7 +149,7 @@ static ngx_int_t
 ngx_http_client_test_handler(ngx_http_request_t *r)
 {
     ngx_http_request_t         *hcr;
-    static ngx_str_t   request_url = ngx_string("http://127.0.0.1/");
+    static ngx_str_t   request_url = ngx_string("http://101.200.241.232/");
 
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "http client test handler");

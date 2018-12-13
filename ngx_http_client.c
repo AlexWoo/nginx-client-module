@@ -1781,5 +1781,7 @@ ngx_http_client_finalize_request(ngx_http_request_t *r, ngx_flag_t closed)
 
     if (closed) {
         ngx_client_close(s);
+    } else {
+        ngx_client_set_keepalive(s);
     }
 }
