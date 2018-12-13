@@ -10,6 +10,7 @@
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_event.h>
+#include <ngx_http.h>
 
 
 typedef struct ngx_client_session_s     ngx_client_session_t;
@@ -126,6 +127,19 @@ ngx_int_t ngx_client_read(ngx_client_session_t *s, ngx_buf_t *b);
 
 
 /*
+ * keepalive client connection, and destroy session
+ *  if use client connect the same ip:port,
+ *  new client session will reuse the connection
+ *
+ * return value:
+ *      void
+ * paras:
+ *      s: client session
+ */
+void ngx_client_set_keepalive(ngx_client_session_t *s);
+
+
+/*
  * close client session
  *
  * return value:
@@ -134,6 +148,13 @@ ngx_int_t ngx_client_read(ngx_client_session_t *s, ngx_buf_t *b);
  *      s: client session
  */
 void ngx_client_close(ngx_client_session_t *s);
+
+
+/*
+ * paras:
+ *      r: http request to query status of client
+ */
+ngx_chain_t *ngx_client_state(ngx_http_request_t *r, unsigned detail);
 
 
 #endif

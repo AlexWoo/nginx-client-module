@@ -124,7 +124,7 @@ ngx_client_test_recv(ngx_client_session_t *s)
             n, &recv, recv.len);
 
     ngx_http_finalize_request(r, NGX_HTTP_FORBIDDEN);
-    ngx_client_close(s);
+    ngx_client_set_keepalive(s);
     return;
 }
 

@@ -8,26 +8,379 @@
 #include "ngx_event_resolver.h"
 #include "ngx_dynamic_resolver.h"
 #include "ngx_poold.h"
+#include "ngx_map.h"
 
 
 #define NGX_CLIENT_DISCARD_BUFFER_SIZE  4096
 
 
-/*
- * stage:
- *      create client
- *      resolving
- *      connecting to server
- *      connected
- *      close
- */
+static void *ngx_client_module_create_conf(ngx_cycle_t *cycle);
+static char *ngx_client_module_init_conf(ngx_cycle_t *cycle, void *conf);
 
+
+typedef struct ngx_client_pool_s  ngx_client_pool_t;
+
+
+struct ngx_client_pool_s {
+    ngx_map_node_t              node;
+    ngx_queue_t                 cs_queue;  /* client session queue */
+    ngx_uint_t                  qsize;     /* client pool size */
+
+    u_char                      addr[NGX_SOCKADDR_STRLEN];
+    ngx_str_t                   paddr;
+
+    ngx_client_pool_t          *next;      /* free pool node */
+};
+
+
+typedef struct {
+    ngx_map_t                   client_pools; /* key is ip:port */
+    /* max keepalive client session */
+    ngx_uint_t                  max_idle_client;
+    ngx_msec_t                  keepalive;
+
+    ngx_uint_t                  idle_connction; /* connection num in pools */
+    ngx_uint_t                  nalloc;
+    ngx_uint_t                  nfree;
+    ngx_client_pool_t          *free;         /* recycle free pool node */
+} ngx_client_conf_t;
+
+
+static ngx_command_t  ngx_client_commands[] = {
+
+    { ngx_string("max_idle_client"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_num_slot,
+      0,
+      offsetof(ngx_client_conf_t, max_idle_client),
+      NULL },
+
+    { ngx_string("keepalive"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_msec_slot,
+      0,
+      offsetof(ngx_client_conf_t, keepalive),
+      NULL },
+
+      ngx_null_command
+};
+
+
+static ngx_core_module_t    ngx_client_module_ctx = {
+    ngx_string("client"),
+    ngx_client_module_create_conf,
+    ngx_client_module_init_conf
+};
+
+
+ngx_module_t  ngx_client_module = {
+    NGX_MODULE_V1,
+    &ngx_client_module_ctx,                 /* module context */
+    ngx_client_commands,                    /* module directives */
+    NGX_CORE_MODULE,                        /* module type */
+    NULL,                                   /* init master */
+    NULL,                                   /* init module */
+    NULL,                                   /* init process */
+    NULL,                                   /* init thread */
+    NULL,                                   /* exit thread */
+    NULL,                                   /* exit process */
+    NULL,                                   /* exit master */
+    NGX_MODULE_V1_PADDING
+};
+
+
+static void *
+ngx_client_module_create_conf(ngx_cycle_t *cycle)
+{
+    ngx_client_conf_t          *ccf;
+
+    ccf = ngx_pcalloc(cycle->pool, sizeof(ngx_client_conf_t));
+    if (ccf == NULL) {
+        return NULL;
+    }
+
+    ngx_map_init(&ccf->client_pools, ngx_map_hash_str, ngx_cmp_str);
+
+    ccf->max_idle_client = NGX_CONF_UNSET_UINT;
+    ccf->keepalive = NGX_CONF_UNSET_MSEC;
+
+    return ccf;
+}
+
+
+static char *
+ngx_client_module_init_conf(ngx_cycle_t *cycle, void *conf)
+{
+    ngx_client_conf_t          *ccf = conf;
+
+    ngx_conf_init_uint_value(ccf->max_idle_client, 1024);
+    ngx_conf_init_msec_value(ccf->keepalive, 60000);
+
+    return NGX_CONF_OK;
+}
+
+
+/* client pool */
+static ngx_client_pool_t *
+ngx_client_get_client_pool()
+{
+    ngx_client_conf_t          *ccf;
+    ngx_client_pool_t          *pool;
+
+    ccf = (ngx_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                             ngx_client_module);
+
+    pool = ccf->free;
+    if (pool == NULL) {
+        pool = ngx_pcalloc(ngx_cycle->pool, sizeof(ngx_client_pool_t));
+        if (pool == NULL) {
+            return NULL;
+        }
+
+        ++ccf->nalloc;
+    } else {
+        ccf->free = pool->next;
+        ngx_memzero(pool, sizeof(ngx_client_pool_t));
+
+        --ccf->nfree;
+    }
+
+    ngx_queue_init(&pool->cs_queue);
+
+    return pool;
+}
+
+
+static void
+ngx_client_put_client_pool(ngx_client_pool_t *p)
+{
+    ngx_client_conf_t          *ccf;
+
+    ccf = (ngx_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                             ngx_client_module);
+
+    p->next = ccf->free;
+    ccf->free = p;
+
+    ++ccf->nfree;
+}
+
+
+static ngx_connection_t *
+ngx_client_get_connection(struct sockaddr *sockaddr, socklen_t socklen)
+{
+    ngx_client_conf_t          *ccf;
+    ngx_client_pool_t          *pool;
+    ngx_map_node_t             *node;
+    ngx_queue_t                *cq;
+    ngx_str_t                   paddr;
+    u_char                      addr[NGX_SOCKADDR_STRLEN];
+    ngx_connection_t           *c;
+
+    ccf = (ngx_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                             ngx_client_module);
+
+#if (NGX_HAVE_UNIX_DOMAIN)
+    if (sockaddr->sa_family == AF_UNIX) { // Unix will not reuse
+        return NULL;
+    }
+#endif
+
+    // get client connection pool for sockaddr
+    paddr.data = addr;
+    paddr.len = NGX_SOCKADDR_STRLEN;
+    paddr.len = ngx_sock_ntop(sockaddr, socklen, paddr.data, paddr.len, 1);
+
+    node = ngx_map_find(&ccf->client_pools, (intptr_t) &paddr);
+
+    if (node == NULL) { // connection pool for addr is empty
+        return NULL;
+    }
+
+    // get a idle connection from client connection pool
+    pool = (ngx_client_pool_t *) node;
+    cq = ngx_queue_head(&pool->cs_queue);
+    ngx_queue_remove(cq);
+    c = (ngx_connection_t *) ((char *) cq - offsetof(ngx_connection_t, queue));
+    --ccf->idle_connction;
+    --pool->qsize;
+
+    // recycle empty pool
+    if (ngx_queue_empty(&pool->cs_queue)) {
+        ngx_map_delete(&ccf->client_pools, (intptr_t) &paddr);
+        ngx_client_put_client_pool(pool);
+    }
+
+    // init connection
+    if (c->read->timer_set) {
+        ngx_del_timer(c->read);
+    }
+
+    if (c->read->posted) {
+        ngx_delete_posted_event(c->read);
+    }
+
+    return c;
+}
+
+
+static void
+ngx_client_keepalive_handler(ngx_event_t *rev)
+{
+    ngx_client_conf_t          *ccf;
+    ngx_client_pool_t          *pool;
+    ngx_connection_t           *c;
+    ngx_int_t                   n;
+    ngx_buf_t                   b;
+    u_char                      buffer[NGX_CLIENT_DISCARD_BUFFER_SIZE];
+
+    c = rev->data;
+
+    ngx_log_debug0(NGX_LOG_DEBUG_CORE, c->log, 0, "client keepalive handler");
+
+    if (rev->timedout || c->close) {
+        goto close;
+    }
+
+    // read and discard data
+    b.start = buffer;
+    b.end = buffer + NGX_CLIENT_DISCARD_BUFFER_SIZE;
+
+    for (;;) {
+        b.pos = b.last = b.start;
+
+        n = c->recv(c, b.last, b.end - b.last);
+
+        if (n == NGX_AGAIN) {
+            if (ngx_handle_read_event(rev, 0) != NGX_OK) {
+                goto close;
+            }
+
+            return;
+        }
+
+        if (n == 0 || n == NGX_ERROR) {
+            ngx_log_error(NGX_LOG_INFO, c->log, ngx_errno,
+                    "server close while client keepalive");
+            goto close;
+        }
+
+        ngx_log_error(NGX_LOG_INFO, c->log, 0,
+                "server send data while client keepalive");
+    }
+
+close:
+    // remove connection from pool
+    ccf = (ngx_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                             ngx_client_module);
+
+    pool = c->data;
+
+    ngx_queue_remove(&c->queue);
+    --ccf->idle_connction;
+    --pool->qsize;
+
+    // recycle empty pool
+    if (ngx_queue_empty(&pool->cs_queue)) {
+        ngx_map_delete(&ccf->client_pools, (intptr_t) &pool->paddr);
+        ngx_client_put_client_pool(pool);
+    }
+
+    ngx_close_connection(c);
+}
+
+
+static void
+ngx_client_reusable_connection(ngx_client_session_t *s)
+{
+    ngx_client_conf_t          *ccf;
+    ngx_client_pool_t          *pool;
+    ngx_map_node_t             *node;
+    ngx_connection_t           *c;
+    ngx_str_t                   paddr;
+    u_char                      addr[NGX_SOCKADDR_STRLEN];
+
+    ccf = (ngx_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                             ngx_client_module);
+
+    c = s->connection;
+
+#if (NGX_HAVE_UNIX_DOMAIN)
+    if (s->peer.sockaddr->sa_family == AF_UNIX) { // Unix will not reuse
+        return;
+    }
+#endif
+
+    if (ccf->idle_connction > ccf->keepalive) {
+        ngx_log_error(NGX_LOG_INFO, c->log, 0,
+                "too many connections in pool");
+        return;
+    }
+
+    c->pool = NULL;
+
+    // get client connection pool for c->sockaddr
+    paddr.data = addr;
+    paddr.len = NGX_SOCKADDR_STRLEN;
+    paddr.len = ngx_sock_ntop(s->peer.sockaddr, s->peer.socklen,
+                              paddr.data, paddr.len, 1);
+
+    node = ngx_map_find(&ccf->client_pools, (intptr_t) &paddr);
+    pool = (ngx_client_pool_t *) node;
+
+    if (pool == NULL) { // connection pool for addr is empty
+        pool = ngx_client_get_client_pool();
+        if (pool == NULL) {
+            return;
+        }
+
+        ngx_memcpy(pool->addr, addr, NGX_SOCKADDR_STRLEN);
+        pool->paddr.data = pool->addr;
+        pool->paddr.len = paddr.len;
+
+        pool->node.raw_key = (intptr_t) &pool->paddr;
+        ngx_map_insert(&ccf->client_pools, &pool->node, 0);
+    }
+
+    // put connection in connection pool
+    ngx_queue_insert_head(&pool->cs_queue, &c->queue);
+    c->data = pool;
+    ++ccf->idle_connction;
+    ++pool->qsize;
+
+    c->log = ngx_cycle->log;
+    c->read->log = ngx_cycle->log;
+
+    // set timer for keepalive time
+    c->read->handler = ngx_client_keepalive_handler;
+    ngx_add_timer(c->read, ccf->keepalive);
+
+    if (c->write->timer_set) {
+        ngx_del_timer(c->write);
+    }
+
+    if (c->write->posted) {
+        ngx_delete_posted_event(c->write);
+    }
+
+    if (c->write->active && (ngx_event_flags & NGX_USE_LEVEL_EVENT)) {
+        if (ngx_del_event(c->write, NGX_WRITE_EVENT, 0) != NGX_OK) {
+            ngx_close_connection(c);
+            return;
+        }
+    }
+}
+
+
+/* client */
 
 static u_char *
 ngx_client_log_error(ngx_log_t *log, u_char *buf, size_t len)
 {
     u_char                     *p;
     ngx_client_session_t       *s;
+
+    p = buf;
 
     if (log->action) {
         p = ngx_snprintf(buf, len, " while %s", log->action);
@@ -36,6 +389,9 @@ ngx_client_log_error(ngx_log_t *log, u_char *buf, size_t len)
     }
 
     s = log->data;
+    if (s == NULL) {
+        return p;
+    }
 
     if (s->connection) {
         p = ngx_snprintf(buf, len, ", server ip: %V",
@@ -55,7 +411,24 @@ ngx_client_log_error(ngx_log_t *log, u_char *buf, size_t len)
 static ngx_int_t
 ngx_client_get_peer(ngx_peer_connection_t *pc, void *data)
 {
-    return NGX_OK;
+    ngx_connection_t           *c;
+
+    c = ngx_client_get_connection(pc->sockaddr, pc->socklen);
+    if (c == NULL) { // cannot find reusable keepalive connection
+        return NGX_OK;
+    }
+
+    c->idle = 0;
+    c->sent = 0;
+    c->log = pc->log;
+    c->read->log = pc->log;
+    c->write->log = pc->log;
+    c->pool->log = pc->log;
+
+    pc->connection = c;
+    pc->cached = 1;
+
+    return NGX_DONE;
 }
 
 
@@ -274,18 +647,24 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
 
     ngx_inet_set_port(sa, s->port);
 
-    s->peer.sockaddr = sa;
+    s->peer.sockaddr = ngx_pcalloc(s->pool, sizeof(socklen));
+    ngx_memcpy(s->peer.sockaddr, sa, socklen);
     s->peer.socklen = socklen;
     s->peer.name = &s->server;
 
     s->log.action = "connecting to server";
 
     rc = ngx_event_connect_peer(&s->peer);
-    if (rc != NGX_OK && rc != NGX_AGAIN) {
+    if (rc == NGX_ERROR) {
         ngx_log_error(NGX_LOG_ERR, &s->log, ngx_errno,
                 "nginx client connect peer failed");
         goto failed;
     }
+
+    // NGX_AGAIN: send syn, wait for syn,ack
+    // NGX_OK:    connect to server
+    // NGX_DONE:  reuse keepalive connection
+
     s->connection = s->peer.connection;
     c = s->connection;
     c->pool = s->pool;
@@ -762,6 +1141,25 @@ ngx_client_read(ngx_client_session_t *s, ngx_buf_t *b)
 
 
 void
+ngx_client_set_keepalive(ngx_client_session_t *s)
+{
+    ngx_pool_t                 *pool;
+
+    if (s->closed) {
+        return;
+    }
+
+    ngx_log_debug0(NGX_LOG_DEBUG_CORE, &s->log, 0,
+            "nginx client set keepalive");
+
+    ngx_client_reusable_connection(s);
+
+    pool = s->pool;
+    NGX_DESTROY_POOL(pool);
+}
+
+
+void
 ngx_client_close(ngx_client_session_t *s)
 {
     ngx_client_closed_pt        closed;
@@ -775,8 +1173,7 @@ ngx_client_close(ngx_client_session_t *s)
 
     s->closed = 1;
 
-    ngx_log_debug0(NGX_LOG_DEBUG_CORE, &s->log, 0,
-            "nginx client close");
+    ngx_log_debug0(NGX_LOG_DEBUG_CORE, &s->log, 0, "nginx client close");
 
     if (s->client_closed) {
         closed = s->client_closed;
@@ -789,4 +1186,65 @@ ngx_client_close(ngx_client_session_t *s)
 
     pool = s->pool;
     NGX_DESTROY_POOL(pool); /* s alloc from pool */
+}
+
+
+ngx_chain_t *
+ngx_client_state(ngx_http_request_t *r, unsigned detail)
+{
+    ngx_client_conf_t          *ccf;
+    ngx_chain_t                *cl;
+    ngx_buf_t                  *b;
+    ngx_map_node_t             *node;
+    ngx_client_pool_t          *pool;
+    size_t                      len, len1;
+    ngx_uint_t                  n;
+
+    ccf = (ngx_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                             ngx_client_module);
+
+    len = sizeof("##########ngx client connection pool##########\n") - 1
+        + sizeof("ngx_client_pool nalloc node: \n") - 1 + NGX_OFF_T_LEN
+        + sizeof("ngx_client_pool nfree node: \n") - 1 + NGX_OFF_T_LEN
+        + sizeof("ngx_client_pool idle connection: \n") - 1 + NGX_OFF_T_LEN;
+
+    /* node for create pool */
+    if (detail) {
+        n = ccf->nalloc - ccf->nfree;
+        /* "    addr:port: qsize\n" */
+        len1 = 4 + NGX_SOCKADDR_STRLEN + 2 + NGX_OFF_T_LEN + 1;
+        len += len1 * n;
+    }
+
+    cl = ngx_alloc_chain_link(r->pool);
+    if (cl == NULL) {
+        return NULL;
+    }
+    cl->next = NULL;
+
+    b = ngx_create_temp_buf(r->pool, len);
+    if (b == NULL) {
+        return NULL;
+    }
+    cl->buf = b;
+
+    b->last = ngx_snprintf(b->last, len,
+            "##########ngx client connection pool##########\n"
+            "ngx_client_pool nalloc node: %ui\n"
+            "ngx_client_pool nfree node: %ui\n"
+            "ngx_client_pool idle connection: %ui\n",
+            ccf->nalloc, ccf->nfree, ccf->idle_connction);
+
+    if (detail) {
+        for (node = ngx_map_begin(&ccf->client_pools); node;
+                node = ngx_map_next(node))
+        {
+            /* m is first element of ngx_poold_node_t */
+            pool = (ngx_client_pool_t *) node;
+            b->last = ngx_snprintf(b->last, len1, "    %V: %ui\n",
+                    &pool->paddr, pool->qsize);
+        }
+    }
+
+    return cl;
 }
