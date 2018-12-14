@@ -7,7 +7,8 @@
 #include "ngx_rbuf.h"
 
 
-static char *ngx_http_client_test(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+static char *ngx_http_client_test(ngx_conf_t *cf, ngx_command_t *cmd,
+       void *conf);
 
 
 static ngx_command_t  ngx_http_client_test_commands[] = {
@@ -58,13 +59,11 @@ static void
 ngx_http_client_test_recv_body(void *request, ngx_http_request_t *hcr)
 {
     ngx_http_request_t             *r;
-    ngx_http_client_ctx_t          *ctx;
     ngx_chain_t                    *cl = NULL;
     ngx_chain_t                   **ll;
     ngx_int_t                       rc;
 
     r = request;
-    ctx = hcr->ctx[0];
 
     ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
             "http client test recv body");
@@ -73,7 +72,7 @@ ngx_http_client_test_recv_body(void *request, ngx_http_request_t *hcr)
 
     ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
             "http client test recv body, rc %i %i, %O",
-            rc, ngx_errno, ctx->rbytes);
+            rc, ngx_errno, ngx_http_client_rbytes(hcr));
 
     if (rc == 0) {
         goto done;
@@ -92,35 +91,39 @@ ngx_http_client_test_recv_body(void *request, ngx_http_request_t *hcr)
     }
 
     ngx_http_output_filter(r, cl);
-    goto ok;
+
+    ngx_put_chainbufs(cl);
+    ngx_http_run_posted_requests(r->connection);
+
+    if (rc == NGX_AGAIN) {
+        return;
+    }
+
+    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "client detach");
+
+    //ngx_http_client_detach(hcr);
+    ngx_http_client_finalize_request(hcr, 0);
 
 done:
     ngx_http_finalize_request(r, rc);
-    ngx_http_client_finalize_request(hcr, 1);
-
-ok:
-    ngx_put_chainbufs(cl);
-    ngx_http_run_posted_requests(r->connection);
 }
 
 static void
 ngx_http_client_test_recv(void *request, ngx_http_request_t *hcr)
 {
     ngx_http_request_t             *r;
-    ngx_http_client_ctx_t          *ctx;
     static ngx_str_t                content_type = ngx_string("Content-Type");
     static ngx_str_t                connection = ngx_string("Connection");
     static ngx_str_t                unknown = ngx_string("Unknown");
     ngx_str_t                      *ct, *con;
 
     r = request;
-    ctx = hcr->ctx[0];
 
     ngx_log_error(NGX_LOG_INFO, r->connection->log, 0, "http client test recv");
 
     r->headers_out.status = 200;
 
-    ctx->read_handler = ngx_http_client_test_recv_body;
+    ngx_http_client_set_read_handler(hcr, ngx_http_client_test_recv_body);
 
     ngx_http_send_header(r);
 
@@ -146,18 +149,17 @@ static ngx_int_t
 ngx_http_client_test_handler(ngx_http_request_t *r)
 {
     ngx_http_request_t         *hcr;
-    static ngx_str_t            request_url = ngx_string("http://127.0.0.1/");
+    static ngx_str_t   request_url = ngx_string("http://101.200.241.232/");
 
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "http client test handler");
 
-    hcr = ngx_http_client_create_request(&request_url, NGX_HTTP_CLIENT_GET,
-            NGX_HTTP_CLIENT_VERSION_11, NULL, r->connection->log,
-            ngx_http_client_test_recv, NULL);
+    hcr = ngx_http_client_create(r->connection->log, NGX_HTTP_CLIENT_GET,
+            &request_url, NULL, NULL, r);
 
-    if (ngx_http_client_send(hcr, NULL, r, r->connection->log) != NGX_OK) {
-        return NGX_HTTP_BAD_GATEWAY;
-    }
+    ngx_http_client_set_read_handler(hcr, ngx_http_client_test_recv);
+
+    ngx_http_client_send(hcr);
 
     ++r->count;
 

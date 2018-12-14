@@ -2,6 +2,7 @@ ngx_addon_name=ngx_client_module
 
 
 CORE_MODULES="$CORE_MODULES                                         \
+             ngx_client_module                                      \
              ngx_http_client_module                                 \
              "
 

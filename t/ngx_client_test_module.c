@@ -60,7 +60,7 @@ ngx_client_test_connected(ngx_client_session_t *s)
     ngx_http_request_t         *r;
     ngx_event_t                *wev;
 
-    ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "client connected");
+    ngx_log_error(NGX_LOG_ERR, &s->log, 0, "client connected");
 
     r = s->data;
     wev = s->peer.connection->write;
@@ -104,12 +104,12 @@ ngx_client_test_recv(ngx_client_session_t *s)
 
     n = c->recv(c, b->pos, b->end - b->last);
     if (n == NGX_AGAIN) {
-        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "client recv NGX_AGAIN");
+        ngx_log_error(NGX_LOG_ERR, &s->log, 0, "client recv NGX_AGAIN");
         return;
     }
 
     if (n == NGX_ERROR || n == 0) {
-        ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "client recv NGX_ERROR");
+        ngx_log_error(NGX_LOG_ERR, &s->log, 0, "client recv NGX_ERROR");
         ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
         ngx_client_close(s);
         return;
@@ -120,36 +120,31 @@ ngx_client_test_recv(ngx_client_session_t *s)
     recv.data = b->pos;
     recv.len = b->last - b->pos;
 
-    ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "client recv %d: %V, %z",
+    ngx_log_error(NGX_LOG_ERR, &s->log, 0, "client recv %d: %V, %z",
             n, &recv, recv.len);
 
     ngx_http_finalize_request(r, NGX_HTTP_FORBIDDEN);
-    ngx_client_close(s);
+    ngx_client_set_keepalive(s);
     return;
 }
 
 static void
 ngx_client_test_send(ngx_client_session_t *s)
 {
-    ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "client send");
+    ngx_log_error(NGX_LOG_ERR, &s->log, 0, "client send");
 }
 
 static void
 ngx_client_test_closed(ngx_client_session_t *s)
 {
-    ngx_log_error(NGX_LOG_ERR, s->connection->log, 0, "client closed");
+    ngx_log_error(NGX_LOG_ERR, &s->log, 0, "client closed");
 }
 
 static ngx_int_t
 ngx_client_test_handler(ngx_http_request_t *r)
 {
     ngx_client_session_t           *s;
-    ngx_client_init_t              *ci;
     ngx_str_t                       echo;
-    //static ngx_str_t                server = ngx_string("127.0.0.1:10000");
-    //static ngx_str_t                server = ngx_string("127.0.0.1:80");
-    static ngx_str_t                server = ngx_string("10.1.1.1:80");
-    //static ngx_str_t                server = ngx_string("www.test.com:80");
 
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0, "client test handler");
 
@@ -159,26 +154,21 @@ ngx_client_test_handler(ngx_http_request_t *r)
         return NGX_HTTP_BAD_REQUEST;
     }
 
-    ci = ngx_client_init(&server, NULL, 0, r->connection->log);
-    if (ci == NULL) {
+    s = ngx_client_create(&echo, NULL, 0, r->connection->log);
+    if (s == NULL) {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
     //ci->dynamic_resolver = 0;
-    ci->connect_timeout = 1000;
-    ci->max_retries = 1;
     //ci->recvbuf = 4096;
 
-    ci->connected = ngx_client_test_connected;
-    ci->recv = ngx_client_test_recv;
-    ci->send = ngx_client_test_send;
-    ci->closed = ngx_client_test_closed;
-
-    s = ngx_client_connect(ci, r->connection->log);
-    if (s == NULL) {
-        return NGX_HTTP_INTERNAL_SERVER_ERROR;
-    }
+    s->client_connected = ngx_client_test_connected;
+    s->client_recv = ngx_client_test_recv;
+    s->client_send = ngx_client_test_send;
+    s->client_closed = ngx_client_test_closed;
     s->data = r;
+
+    ngx_client_connect(s);
 
     ++r->count;
 
