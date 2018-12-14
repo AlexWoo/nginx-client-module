@@ -38,6 +38,12 @@ typedef struct {
     /* max keepalive client session */
     ngx_uint_t                  max_idle_client;
     ngx_msec_t                  keepalive;
+    ngx_msec_t                  connect_timeout;
+    ngx_msec_t                  send_timeout;
+    size_t                      postpone_output;
+    ngx_flag_t                  dynamic_resolver;
+    ngx_flag_t                  tcp_nodelay;
+    ngx_flag_t                  tcp_nopush;
 
     ngx_uint_t                  idle_connction; /* connection num in pools */
     ngx_uint_t                  nalloc;
@@ -60,6 +66,48 @@ static ngx_command_t  ngx_client_commands[] = {
       ngx_conf_set_msec_slot,
       0,
       offsetof(ngx_client_conf_t, keepalive),
+      NULL },
+
+    { ngx_string("connect_timeout"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_msec_slot,
+      0,
+      offsetof(ngx_client_conf_t, connect_timeout),
+      NULL },
+
+    { ngx_string("send_timeout"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_msec_slot,
+      0,
+      offsetof(ngx_client_conf_t, send_timeout),
+      NULL },
+
+    { ngx_string("postpone_output"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_size_slot,
+      0,
+      offsetof(ngx_client_conf_t, postpone_output),
+      NULL },
+
+    { ngx_string("dynamic_resolver"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      0,
+      offsetof(ngx_client_conf_t, dynamic_resolver),
+      NULL },
+
+    { ngx_string("tcp_nodelay"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      0,
+      offsetof(ngx_client_conf_t, tcp_nodelay),
+      NULL },
+
+    { ngx_string("tcp_nopush"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_FLAG,
+      ngx_conf_set_flag_slot,
+      0,
+      offsetof(ngx_client_conf_t, tcp_nopush),
       NULL },
 
       ngx_null_command
@@ -103,6 +151,12 @@ ngx_client_module_create_conf(ngx_cycle_t *cycle)
 
     ccf->max_idle_client = NGX_CONF_UNSET_UINT;
     ccf->keepalive = NGX_CONF_UNSET_MSEC;
+    ccf->connect_timeout = NGX_CONF_UNSET_MSEC;
+    ccf->send_timeout = NGX_CONF_UNSET_MSEC;
+    ccf->postpone_output = NGX_CONF_UNSET_SIZE;
+    ccf->dynamic_resolver = NGX_CONF_UNSET;
+    ccf->tcp_nodelay = NGX_CONF_UNSET;
+    ccf->tcp_nodelay = NGX_CONF_UNSET;
 
     return ccf;
 }
@@ -115,6 +169,13 @@ ngx_client_module_init_conf(ngx_cycle_t *cycle, void *conf)
 
     ngx_conf_init_uint_value(ccf->max_idle_client, 1024);
     ngx_conf_init_msec_value(ccf->keepalive, 60000);
+
+    ngx_conf_init_msec_value(ccf->connect_timeout, 3000);
+    ngx_conf_init_msec_value(ccf->send_timeout, 10000);
+    ngx_conf_init_size_value(ccf->postpone_output, 1460);
+    ngx_conf_init_value(ccf->dynamic_resolver, 1);
+    ngx_conf_init_value(ccf->tcp_nodelay, 1);
+    ngx_conf_init_value(ccf->tcp_nopush, 0);
 
     return NGX_CONF_OK;
 }
@@ -635,6 +696,7 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     ngx_client_session_t       *s;
     ngx_connection_t           *c;
     ngx_int_t                   rc;
+    int                         tcp_nodelay;
 
     s = data;
 
@@ -668,6 +730,30 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     c = s->connection;
     c->pool = s->pool;
     c->pool->log = s->peer.log;
+
+    // set tcp_nodelay
+    if (c->type == SOCK_STREAM && s->tcp_nodelay
+            && c->tcp_nodelay == NGX_TCP_NODELAY_UNSET)
+    {
+        ngx_log_debug0(NGX_LOG_DEBUG_CORE, c->log, 0, "tcp_nodelay");
+
+        tcp_nodelay = 1;
+
+        if (setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY,
+                       (const void *) &tcp_nodelay, sizeof(int)) == -1)
+        {
+            ngx_connection_error(c, ngx_socket_errno,
+                                 "setsockopt(TCP_NODELAY) failed");
+            goto failed;
+        }
+
+        c->tcp_nodelay = NGX_TCP_NODELAY_SET;
+    }
+
+    // set tcp_nopush
+    if (!s->tcp_nopush) {
+        c->tcp_nopush = NGX_TCP_NOPUSH_DISABLED;
+    }
 
     c->addr_text.data = ngx_pcalloc(s->pool, NGX_SOCKADDR_STRLEN);
     if (c->addr_text.data == NULL) {
@@ -751,10 +837,14 @@ ngx_client_create(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
         ngx_log_t *log)
 {
     ngx_client_session_t       *s;
+    ngx_client_conf_t          *ccf;
     ngx_pool_t                 *pool;
     ngx_int_t                   rc, n;
     u_char                     *p, *last;
     size_t                      plen;
+
+    ccf = (ngx_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                             ngx_client_module);
 
     if (peer == NULL || peer->len == 0) {
         ngx_log_error(NGX_LOG_ERR, log, 0, "client init, peer is NULL");
@@ -854,12 +944,12 @@ ngx_client_create(ngx_str_t *peer, ngx_str_t *local, ngx_flag_t udp,
     }
 
     /* set default */
-    s->connect_timeout = 3000;
-    s->send_timeout = 60000;
-
-    s->postpone_output = 1460;
-
-    s->dynamic_resolver = 1;
+    s->connect_timeout = ccf->connect_timeout;
+    s->send_timeout = ccf->send_timeout;
+    s->postpone_output = ccf->postpone_output;
+    s->dynamic_resolver = ccf->dynamic_resolver;
+    s->tcp_nodelay = ccf->tcp_nodelay;
+    s->tcp_nopush = ccf->tcp_nopush;
 
     /* set peer */
     s->peer.log = &s->log;

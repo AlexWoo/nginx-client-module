@@ -52,6 +52,9 @@ struct ngx_client_session_s {
     /* use dynamic resolver mechanism for resolving domain */
     unsigned                    dynamic_resolver:1;
 
+    unsigned                    tcp_nodelay:1; /* TCP_NODELAY */
+    unsigned                    tcp_nopush:1;  /* TCP_CORK */
+
     /* runtime part */
 
     size_t                      recv;        /* client recv bytes */
