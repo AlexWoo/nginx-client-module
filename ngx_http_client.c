@@ -164,6 +164,9 @@ typedef struct {
 
 typedef struct {
     ngx_hash_t                      headers_in_hash;
+
+    /* wait for response header timeout */
+    ngx_msec_t                      header_timeout;
 } ngx_http_client_conf_t;
 
 
@@ -260,6 +263,13 @@ ngx_http_client_fill_header_t ngx_http_client_fill_header[] = {
 
 static ngx_command_t    ngx_http_client_commands[] = {
 
+    { ngx_string("header_timeout"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_msec_slot,
+      0,
+      offsetof(ngx_http_client_conf_t, header_timeout),
+      NULL },
+
       ngx_null_command
 };
 
@@ -297,6 +307,8 @@ ngx_http_client_module_create_conf(ngx_cycle_t *cycle)
         return NULL;
     }
 
+    hccf->header_timeout = NGX_CONF_UNSET_MSEC;
+
     return hccf;
 }
 
@@ -304,7 +316,7 @@ ngx_http_client_module_create_conf(ngx_cycle_t *cycle)
 static char *
 ngx_http_client_module_init_conf(ngx_cycle_t *cycle, void *conf)
 {
-    ngx_http_upstream_main_conf_t  *hccf = conf;
+    ngx_http_client_conf_t         *hccf = conf;
 
     ngx_array_t                     headers_in;
     ngx_hash_key_t                 *hk;
@@ -341,6 +353,8 @@ ngx_http_client_module_init_conf(ngx_cycle_t *cycle, void *conf)
     if (ngx_hash_init(&hash, headers_in.elts, headers_in.nelts) != NGX_OK) {
         return NGX_CONF_ERROR;
     }
+
+    ngx_conf_init_msec_value(hccf->header_timeout, 10000);
 
     return NGX_CONF_OK;
 }
@@ -1438,8 +1452,12 @@ ngx_http_client_create(ngx_log_t *log, ngx_uint_t method, ngx_str_t *url,
     ngx_pool_t                 *pool;
     ngx_http_request_t         *r;
     ngx_http_client_ctx_t      *ctx;
+    ngx_http_client_conf_t     *hccf;
     ngx_client_session_t       *cs;
     ngx_int_t                   rc;
+
+    hccf = (ngx_http_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                                   ngx_http_client_module);
 
     pool = NGX_CREATE_POOL(4096, log);
     if (pool == NULL) {
@@ -1489,8 +1507,8 @@ ngx_http_client_create(ngx_log_t *log, ngx_uint_t method, ngx_str_t *url,
     ctx->request = request;
     ctx->write_handler = send_body;
 
-    ctx->header_timeout = 10000;
-    ctx->header_buffer_size = 4096;
+    ctx->header_timeout = hccf->header_timeout;
+    ctx->header_buffer_size = 4096; // reserved, later will use buffers instead
 
     /* create session */
     cs = ngx_client_create(&ctx->url.host, NULL, 0, log);
@@ -1544,15 +1562,42 @@ ngx_http_client_set_version(ngx_http_request_t *r, ngx_uint_t version)
 
 
 void
-ngx_http_client_set_header_timeout(ngx_http_request_t *r, ngx_msec_t timeout)
+ngx_http_client_setopt(ngx_http_request_t *r, unsigned opt, ngx_uint_t value)
 {
     ngx_http_client_ctx_t      *ctx;
+    ngx_client_session_t       *s;
 
     ctx = r->ctx[0];
+    s = ctx->session;
 
-    ctx->header_timeout = timeout;
+    switch (opt) {
+    case NGX_HTTP_CLIENT_OPT_CONNECT_TIMEOUT:
+        s->connect_timeout = value;
+        break;
+    case NGX_HTTP_CLIENT_OPT_SEND_TIMEOUT:
+        s->send_timeout = value;
+        break;
+    case NGX_HTTP_CLIENT_OPT_POSTPONE_OUTPUT:
+        s->postpone_output = value;
+        break;
+    case NGX_HTTP_CLIENT_OPT_DYNAMIC_RESOLVER:
+        s->dynamic_resolver = value > 0;
+        break;
+    case NGX_HTTP_CLIENT_OPT_TCP_NODELAY:
+        s->tcp_nodelay = value > 0;
+        break;
+    case NGX_HTTP_CLIENT_OPT_TCP_NOPUSH:
+        s->tcp_nopush = value > 0;
+        break;
+    case NGX_HTTP_CLIENT_OPT_HEADER_TIMEOUT:
+        ctx->header_timeout = value;
+        break;
+    default:
+        ngx_log_error(NGX_LOG_ERR, &s->log, 0,
+                "try to set unsupported opt %d", opt);
+        break;
+    }
 }
-
 
 /* send http request */
 
@@ -1709,19 +1754,6 @@ ngx_http_client_header_in(ngx_http_request_t *r, ngx_str_t *key)
     }
 
     return NULL;
-}
-
-
-ngx_int_t
-ngx_http_client_write_body(ngx_http_request_t *r, ngx_chain_t *out)
-{
-    ngx_http_client_ctx_t      *ctx;
-    ngx_client_session_t       *s;
-
-    ctx = r->ctx[0];
-    s = ctx->session;
-
-    return ngx_client_write(s, out);
 }
 
 
