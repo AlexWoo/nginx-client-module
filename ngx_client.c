@@ -379,6 +379,7 @@ ngx_client_reusable_connection(ngx_client_session_t *s)
     }
 
     c->pool = NULL;
+    c->buffer = NULL;
 
     // get client connection pool for c->sockaddr
     paddr.data = addr;
