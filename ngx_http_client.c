@@ -701,6 +701,11 @@ ngx_http_client_discarded_body(ngx_http_request_t *r)
         ngx_http_client_finalize_request(r, 1);
         return;
     }
+
+    // if detach, all http response receive, set keepalive
+    if (rc == NGX_DONE) {
+        ngx_http_client_finalize_request(r, 0);
+    }
 }
 
 
@@ -714,8 +719,6 @@ ngx_http_client_read_handler(ngx_client_session_t *s)
     ctx = r->ctx[0];
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-            "http client, read handler");
-    ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "http client, read handler");
 
     if (ctx->request && ctx->read_handler) {
@@ -1457,7 +1460,7 @@ ngx_http_client_create(ngx_log_t *log, ngx_uint_t method, ngx_str_t *url,
     hccf = (ngx_http_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
                                                    ngx_http_client_module);
 
-    pool = NGX_CREATE_POOL(4096, log);
+    pool = NGX_CREATE_POOL(4096, ngx_cycle->log);
     if (pool == NULL) {
         return NULL;
     }
