@@ -154,8 +154,15 @@ ngx_http_client_test_handler(ngx_http_request_t *r)
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "http client test handler");
 
+//    hcr = ngx_http_client_create(r->connection->log, NGX_HTTP_CLIENT_GET,
+//            &request_url, NULL, NULL, r);
     hcr = ngx_http_client_create(r->connection->log, NGX_HTTP_CLIENT_GET,
-            &request_url, NULL, NULL, r);
+            NULL, NULL, NULL, r);
+    if (ngx_http_client_set_url(hcr, &request_url, r->connection->log)
+            == NGX_ERROR)
+    {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
 
     ngx_http_client_set_read_handler(hcr, ngx_http_client_test_recv);
 

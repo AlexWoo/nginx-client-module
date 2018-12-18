@@ -70,6 +70,20 @@ ngx_http_request_t *ngx_http_client_create(ngx_log_t *log,
     ngx_http_client_handler_pt send_body, void *request);
 
 /*
+ * set url, only can set once
+ *
+ * return value:
+ *      NGX_OK for successd, NGX_ERROR for failed
+ *
+ * paras:
+ *      r: http client request
+ *      url: full request url like "http://test.com/index.html?hello=world"
+ *      log: error in create will use this log
+ */
+ngx_int_t ngx_http_client_set_url(ngx_http_request_t *r, ngx_str_t *url,
+        ngx_log_t *log);
+
+/*
  * set read handler for http client, should set before send request,
  *  otherwise body from server will discard
  *
