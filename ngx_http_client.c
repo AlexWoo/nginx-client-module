@@ -650,15 +650,18 @@ ngx_http_client_free_request(ngx_http_request_t *hcr)
 
     ctx = hcr->ctx[0];
     s = ctx->session;
-    cln = hcr->cleanup;
-    hcr->cleanup = NULL;
 
-    while (cln) {
-        if (cln->handler) {
-            cln->handler(cln->data);
+    if (ctx->request) {
+        cln = hcr->cleanup;
+        hcr->cleanup = NULL;
+
+        while (cln) {
+            if (cln->handler) {
+                cln->handler(cln->data);
+            }
+
+            cln = cln->next;
         }
-
-        cln = cln->next;
     }
 
     if (s) {
@@ -1657,6 +1660,7 @@ ngx_http_client_send(ngx_http_request_t *r)
     ctx->headers_in.content_length_n = -1;
 
     ngx_client_connect(s);
+    r->connection = s->connection;
 
     return NGX_OK;
 }
