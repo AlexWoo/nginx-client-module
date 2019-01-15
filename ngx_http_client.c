@@ -100,6 +100,12 @@ typedef struct {
     ngx_http_chunked_t              chunked;
     ngx_int_t                       length;
 
+    /* bufs */
+    ngx_uint_t                      bufs_alloc;
+    ngx_uint_t                      bufs_free;
+    ngx_chain_t                    *free_bufs;
+    ngx_buf_t                      *buffer;     /* instead of c->buffer */
+
     /* config */
     ngx_msec_t                      header_timeout;
     size_t                          header_buffer_size;
@@ -167,6 +173,8 @@ typedef struct {
 
     /* wait for response header timeout */
     ngx_msec_t                      header_timeout;
+    size_t                          header_buffer_size;
+    ngx_bufs_t                      bufs;
 } ngx_http_client_conf_t;
 
 
@@ -270,6 +278,20 @@ static ngx_command_t    ngx_http_client_commands[] = {
       offsetof(ngx_http_client_conf_t, header_timeout),
       NULL },
 
+    { ngx_string("header_buffer_size"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_size_slot,
+      0,
+      offsetof(ngx_http_client_conf_t, header_buffer_size),
+      NULL },
+
+    { ngx_string("http_client_bufs"),
+      NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_TAKE1,
+      ngx_conf_set_bufs_slot,
+      0,
+      offsetof(ngx_http_client_conf_t, bufs),
+      NULL },
+
       ngx_null_command
 };
 
@@ -308,6 +330,7 @@ ngx_http_client_module_create_conf(ngx_cycle_t *cycle)
     }
 
     hccf->header_timeout = NGX_CONF_UNSET_MSEC;
+    hccf->header_buffer_size = NGX_CONF_UNSET_SIZE;
 
     return hccf;
 }
@@ -355,6 +378,12 @@ ngx_http_client_module_init_conf(ngx_cycle_t *cycle, void *conf)
     }
 
     ngx_conf_init_msec_value(hccf->header_timeout, 10000);
+    ngx_conf_init_size_value(hccf->header_buffer_size, ngx_pagesize);
+
+    if (hccf->bufs.num == 0) {
+        hccf->bufs.num = 32;
+        hccf->bufs.size = ngx_pagesize;
+    }
 
     return NGX_CONF_OK;
 }
@@ -738,7 +767,6 @@ ngx_http_client_process_header(ngx_client_session_t *s)
     ngx_http_request_t         *r;
     ngx_http_client_ctx_t      *ctx;
     ngx_buf_t                  *b;
-    ngx_connection_t           *c;
     ngx_int_t                   n, rc;
     ngx_table_elt_t            *h;
     ngx_http_header_t          *hh;
@@ -749,11 +777,10 @@ ngx_http_client_process_header(ngx_client_session_t *s)
                                                    ngx_http_client_module);
 
     r = s->data;
-    c = r->connection;
     ctx = r->ctx[0];
     rev = r->connection->read;
 
-    b = c->buffer;
+    b = ctx->buffer;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
             "http client, process header");
@@ -912,16 +939,14 @@ ngx_http_client_process_status_line(ngx_client_session_t *s)
     ngx_http_request_t         *r;
     ngx_http_client_ctx_t      *ctx;
     ngx_buf_t                  *b;
-    ngx_connection_t           *c;
     ngx_int_t                   n, rc;
     ngx_event_t                *rev;
 
     r = s->data;
-    c = r->connection;
     ctx = r->ctx[0];
     rev = r->connection->read;
 
-    b = c->buffer;
+    b = ctx->buffer;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
             "http client, process status line");
@@ -1004,7 +1029,7 @@ ngx_http_client_wait_response_handler(ngx_client_session_t *s)
     size = ctx->header_buffer_size;
     rev = s->connection->read;
 
-    b = c->buffer;
+    b = ctx->buffer;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
             "http client, process response handler");
@@ -1016,7 +1041,7 @@ ngx_http_client_wait_response_handler(ngx_client_session_t *s)
             return;
         }
 
-        c->buffer = b;
+        ctx->buffer = b;
     } else if (b->start == NULL) {
 
         b->start = ngx_pcalloc(c->pool, size);
@@ -1288,10 +1313,10 @@ ngx_http_client_body_read_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
 
     while (1) {
         *cl = ngx_get_chainbuf(size, 1);
-        if (hcr->connection->buffer->last != hcr->connection->buffer->pos) {
-            (*cl)->buf->pos = hcr->connection->buffer->pos;
-            (*cl)->buf->last = hcr->connection->buffer->last;
-            hcr->connection->buffer->pos = hcr->connection->buffer->last;
+        if (ctx->buffer->last != ctx->buffer->pos) {
+            (*cl)->buf->pos = ctx->buffer->pos;
+            (*cl)->buf->last = ctx->buffer->last;
+            ctx->buffer->pos = ctx->buffer->last;
             n = NGX_OK;
         } else {
             n = ngx_client_read(s, (*cl)->buf);
@@ -1500,7 +1525,7 @@ ngx_http_client_create(ngx_log_t *log, ngx_uint_t method, ngx_str_t *url,
     ctx->write_handler = send_body;
 
     ctx->header_timeout = hccf->header_timeout;
-    ctx->header_buffer_size = 4096; // reserved, later will use buffers instead
+    ctx->header_buffer_size = hccf->header_buffer_size;
 
     if (url && ngx_http_client_set_url(r, url, log) == NGX_ERROR) {
         // pool has been destroy in set url
