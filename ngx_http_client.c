@@ -1271,11 +1271,12 @@ ngx_http_client_body_chunked(ngx_http_request_t *r, ngx_chain_t *cl)
                     ln = cl;
                     cl = cl->next;
                     ngx_put_chainbuf(ln);
-                    b = cl->buf;
 
                     if (cl == NULL) {
                         return NGX_AGAIN;
                     }
+
+                    b = cl->buf;
                 }
 
                 if (ctx->chunked.size == 0) { // current chunk read over
