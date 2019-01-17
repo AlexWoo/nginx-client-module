@@ -68,7 +68,7 @@ ngx_http_client_test_recv_body(void *request, ngx_http_request_t *hcr)
     ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
             "http client test recv body");
 
-    rc = ngx_http_client_read_body(hcr, &cl, 4096);
+    rc = ngx_http_client_read_body(hcr, &cl);
 
     ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
             "http client test recv body, rc %i %i, %O",
@@ -90,7 +90,6 @@ ngx_http_client_test_recv_body(void *request, ngx_http_request_t *hcr)
 
     ngx_http_output_filter(r, cl);
 
-    ngx_put_chainbufs(cl);
     ngx_http_run_posted_requests(r->connection);
 
     if (rc == NGX_AGAIN) {
@@ -183,12 +182,12 @@ ngx_http_client_test_handler(ngx_http_request_t *r)
     ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
             "http client test after send");
 
-    ngx_http_client_detach(hcr);
-    return NGX_HTTP_FORBIDDEN;
-//
-//    ++r->count;
-//
-//    return NGX_DONE;
+//    ngx_http_client_detach(hcr);
+//    return NGX_HTTP_FORBIDDEN;
+
+    ++r->count;
+
+    return NGX_DONE;
 }
 
 

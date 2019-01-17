@@ -253,19 +253,16 @@ ngx_str_t *ngx_http_client_header_in(ngx_http_request_t *r, ngx_str_t *key);
  * read http response body
  *
  * return value:
- *      >0: bytes read from connection
- *      0: tcp connection disconnect
- *      NGX_ERROR: tcp connection error disconnect
- *      NGX_DECLINED: no space to receive data in connection
- *      NGX_DONE: response body has been read
+ *      NGX_AGAIN: read part of data
+ *      0: tcp connection disconnect, need finalize request with 1
+ *      NGX_ERROR: tcp connection error disconnect, need finalize request with 1
+ *      NGX_DONE: response body has been read, could finalize request with 0
  *
  * paras:
  *      r: http client request
  *      in: where read data put
- *      size: bytes want read
  */
-ngx_int_t ngx_http_client_read_body(ngx_http_request_t *r, ngx_chain_t **in,
-        size_t size);
+ngx_int_t ngx_http_client_read_body(ngx_http_request_t *r, ngx_chain_t **in);
 
 /*
  * get receive bytes

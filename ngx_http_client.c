@@ -97,10 +97,8 @@ typedef struct {
     ngx_int_t                       length;
 
     /* bufs */
-    ngx_uint_t                      bufs_alloc;
-    ngx_uint_t                      bufs_free;
-    ngx_chain_t                    *free_bufs;
-    ngx_buf_t                      *buffer;     /* instead of c->buffer */
+    ngx_chain_t                    *in;
+    ngx_buf_t                      *buffer;     /* status line buf */
 
     /* config */
     ngx_msec_t                      header_timeout;
@@ -165,7 +163,7 @@ typedef struct {
     /* wait for response header timeout */
     ngx_msec_t                      header_timeout;
     size_t                          header_buffer_size;
-    ngx_bufs_t                      bufs;
+    size_t                          body_buffer_size;
 } ngx_http_client_conf_t;
 
 
@@ -265,11 +263,11 @@ static ngx_command_t    ngx_http_client_commands[] = {
       offsetof(ngx_http_client_conf_t, header_buffer_size),
       NULL },
 
-    { ngx_string("http_client_bufs"),
+    { ngx_string("body_buffer_size"),
       NGX_MAIN_CONF|NGX_DIRECT_CONF|NGX_CONF_TAKE1,
-      ngx_conf_set_bufs_slot,
+      ngx_conf_set_size_slot,
       0,
-      offsetof(ngx_http_client_conf_t, bufs),
+      offsetof(ngx_http_client_conf_t, body_buffer_size),
       NULL },
 
       ngx_null_command
@@ -311,6 +309,7 @@ ngx_http_client_module_create_conf(ngx_cycle_t *cycle)
 
     hccf->header_timeout = NGX_CONF_UNSET_MSEC;
     hccf->header_buffer_size = NGX_CONF_UNSET_SIZE;
+    hccf->body_buffer_size = NGX_CONF_UNSET_SIZE;
 
     return hccf;
 }
@@ -359,11 +358,7 @@ ngx_http_client_module_init_conf(ngx_cycle_t *cycle, void *conf)
 
     ngx_conf_init_msec_value(hccf->header_timeout, 10000);
     ngx_conf_init_size_value(hccf->header_buffer_size, ngx_pagesize);
-
-    if (hccf->bufs.num == 0) {
-        hccf->bufs.num = 32;
-        hccf->bufs.size = ngx_pagesize;
-    }
+    ngx_conf_init_size_value(hccf->body_buffer_size, ngx_pagesize);
 
     return NGX_CONF_OK;
 }
@@ -528,6 +523,11 @@ ngx_http_client_free_request(ngx_http_request_t *hcr)
         }
     }
 
+    if (ctx->in) {
+        ngx_put_chainbufs(ctx->in);
+        ctx->in = NULL;
+    }
+
     if (s) {
         s->client_recv = NULL;
         s->client_send = NULL;
@@ -556,13 +556,13 @@ ngx_http_client_close_handler(ngx_client_session_t *s)
 static void
 ngx_http_client_discarded_body(ngx_http_request_t *r)
 {
-    ngx_chain_t                *cl = NULL;
+    ngx_http_client_ctx_t      *ctx;
+    ngx_chain_t                *cl;
     ngx_int_t                   rc;
 
-    rc = ngx_http_client_read_body(r, &cl, 4096);
-    if (cl) {
-        ngx_put_chainbufs(cl);
-    }
+    ctx = r->ctx[0];
+
+    rc = ngx_http_client_read_body(r, &cl);
 
     if (rc == 0 || rc == NGX_ERROR) { // http client close
         ngx_http_client_finalize_request(r, 1);
@@ -572,6 +572,13 @@ ngx_http_client_discarded_body(ngx_http_request_t *r)
     // if detach, all http response receive, set keepalive
     if (rc == NGX_DONE) {
         ngx_http_client_finalize_request(r, 0);
+    }
+
+    // NGX_AGAIN
+
+    if (ctx->in) { // make rbuf recycle immediately
+        ngx_put_chainbufs(ctx->in);
+        ctx->in = NULL;
     }
 }
 
@@ -717,6 +724,8 @@ ngx_http_client_process_header(ngx_client_session_t *s)
                 ctx->headers_in.content_length_n = -1;
             }
 
+            ctx->length = ctx->headers_in.content_length_n;
+
             break;
         }
 
@@ -744,6 +753,7 @@ ngx_http_client_process_header(ngx_client_session_t *s)
             }
 
             /* NGX_OK */
+            ctx->rbytes += n;
 
             continue;
         }
@@ -813,6 +823,7 @@ ngx_http_client_process_status_line(ngx_client_session_t *s)
             }
 
             /* NGX_OK */
+            ctx->rbytes += n;
 
             continue;
         }
@@ -915,6 +926,8 @@ ngx_http_client_wait_response_handler(ngx_client_session_t *s)
 
         return;
     }
+
+    ctx->rbytes += n;
 
     s->client_recv = ngx_http_client_process_status_line;
     return ngx_http_client_process_status_line(s);
@@ -1158,181 +1171,148 @@ destroy:
 
 
 static ngx_int_t
-ngx_http_client_body_read_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
-        size_t size)
+ngx_http_client_body_length(ngx_http_request_t *r, ngx_chain_t *cl)
 {
-    ngx_client_session_t       *s;
     ngx_http_client_ctx_t      *ctx;
-    ngx_chain_t               **cl;
-    ngx_int_t                   n;
-    ngx_event_t                *rev;
+    ngx_buf_t                  *buf;
+    ngx_chain_t               **ll;
+    ngx_int_t                   len;
 
-    ctx = hcr->ctx[0];
-    s = ctx->session;
-    rev = hcr->connection->read;
+    ctx = r->ctx[0];
 
-    for (cl = in; *cl; cl = &(*cl)->next);
+    for (ll = &ctx->in; *ll; ll = &(*ll)->next);
 
-    if (ctx->length == 0) {
-        ctx->length = ctx->headers_in.content_length_n;
-    }
+    while (cl) {
+        *ll = cl;
+        cl = cl->next;
+        (*ll)->next = NULL;
 
-    while (1) {
-        *cl = ngx_get_chainbuf(size, 1);
-        if (ctx->buffer->last != ctx->buffer->pos) {
-            (*cl)->buf->pos = ctx->buffer->pos;
-            (*cl)->buf->last = ctx->buffer->last;
-            ctx->buffer->pos = ctx->buffer->last;
-            n = NGX_OK;
-        } else {
-            n = ngx_client_read(s, (*cl)->buf);
-
-            if (n == 0) {
-                ngx_log_error(NGX_LOG_ERR, hcr->connection->log, ngx_errno,
-                        "http client, server close");
-                return 0;
-            }
-        }
-
-        if (n == NGX_ERROR) {
-            ngx_log_error(NGX_LOG_ERR, hcr->connection->log, ngx_errno,
-                    "http client, body read filter read ERROR");
-            return NGX_ERROR;
-        }
-
-        if (n == NGX_AGAIN) {
-            ngx_put_chainbuf(*cl);
-            (*cl) = NULL;
-
-            if (ngx_handle_read_event(rev, 0) != NGX_OK) {
-                ngx_http_client_finalize_request(hcr, 1);
-                return NGX_ERROR;
-            }
-
-            return NGX_AGAIN;
-        }
-
-        n = (*cl)->buf->last - (*cl)->buf->pos;
-
-        ctx->rbytes += n;
         if (ctx->length != -1) {
-            ctx->length -= n;
-            if (ctx->length <= 0) {
-                ngx_log_error(NGX_LOG_INFO, hcr->connection->log, 0,
-                    "http client, body read filter read %O bytes", ctx->rbytes);
+            buf = (*ll)->buf;
+
+            len = ngx_min(buf->last - buf->pos, ctx->length);
+            ctx->length -= len;
+
+            if (ctx->length == 0) {
+                if (cl || buf->last - buf->pos > len) {
+                    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                            "http client, read unexpected data");
+                    ngx_put_chainbufs(cl);
+                }
                 return NGX_DONE;
             }
         }
 
-        cl = &(*cl)->next;
+        ll = &(*ll)->next;
     }
+
+    return NGX_AGAIN;
 }
 
 
 static ngx_int_t
-ngx_http_client_body_chunked_filter(ngx_http_request_t *hcr, ngx_chain_t **in,
-        size_t size)
+ngx_http_client_body_chunked(ngx_http_request_t *r, ngx_chain_t *cl)
 {
     ngx_http_client_ctx_t      *ctx;
-    ngx_chain_t               **ll, *cl = NULL, *l;
+    ngx_http_client_conf_t     *hccf;
+    ngx_buf_t                  *buf, *b;
+    ngx_chain_t               **ll, *ln;
     ngx_int_t                   rc;
     size_t                      len;
-    ngx_int_t                   n = 0;
 
-    ctx = hcr->ctx[0];
+    ctx = r->ctx[0];
+    hccf = (ngx_http_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                                   ngx_http_client_module);
 
-    if (!ctx->headers_in.chunked) {
-        return ngx_http_client_body_read_filter(hcr, in, size);
-    }
+    for (ll = &ctx->in; *ll; ll = &(*ll)->next);
 
-    rc = ngx_http_client_body_read_filter(hcr, &cl, size);
+    while (1) {
 
-    if (rc == NGX_ERROR || rc == 0) {
-        return rc;
-    }
+        b = cl->buf;
+        rc = ngx_http_parse_chunked(r, b, &ctx->chunked);
 
-    /* NGX_AGAIN */
-
-    for (ll = in; *ll; ll = &(*ll)->next);
-
-    for (;;) {
-
-        rc = ngx_http_parse_chunked(hcr, cl->buf, &ctx->chunked);
-
-        ngx_log_debug7(NGX_LOG_DEBUG_CORE, hcr->connection->log, 0,
+        ngx_log_debug7(NGX_LOG_DEBUG_CORE, r->connection->log, 0,
                 "http client, parse chunked %p %p-%p %p, rc: %d, %O %O",
-                cl->buf->start, cl->buf->pos, cl->buf->last, cl->buf->end,
+                b->start, b->pos, b->last, b->end,
                 rc, ctx->chunked.size, ctx->chunked.length);
 
         if (rc == NGX_OK) {
 
             /* a chunk has been parsed successfully */
 
-            for (;;) {
+            while (1) {
                 if (*ll == NULL) {
-                    *ll = ngx_get_chainbuf(size, 1);
+                    *ll = ngx_get_chainbuf(hccf->body_buffer_size, 1);
+                    if (*ll == NULL) {
+                        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                                "http client, get chainbuf failed");
+                        return NGX_ERROR;
+                    }
                 }
 
-                len = ngx_min(ctx->chunked.size, cl->buf->last
-                                                - cl->buf->pos);
-                if ((*ll)->buf->end - (*ll)->buf->last >= (long) len) {
-                    (*ll)->buf->last = ngx_cpymem((*ll)->buf->last,
-                                                  cl->buf->pos, len);
-                    cl->buf->pos += len;
-                    ctx->chunked.size -= len;
+                buf = (*ll)->buf;
 
-                    n += len;
-
-                    goto done;
+                if (b->last - b->pos >= ctx->chunked.size) {
+                    len = ngx_min(buf->end - buf->last, ctx->chunked.size);
+                } else {
+                    len = ngx_min(buf->end - buf->last, b->last - b->pos);
                 }
 
-                len = (*ll)->buf->end - (*ll)->buf->last;
-                (*ll)->buf->last = ngx_cpymem((*ll)->buf->last,
-                                              cl->buf->pos, len);
-                cl->buf->pos += len;
+                buf->last = ngx_cpymem(buf->last, b->pos, len);
+                b->pos += len;
                 ctx->chunked.size -= len;
 
-                n += len;
+                if (buf->last == buf->end) {
+                    ll = &(*ll)->next;
+                }
 
-                ll = &(*ll)->next;
-            }
+                if (b->pos == b->last) { // current cl read over
+                    ln = cl;
+                    cl = cl->next;
+                    ngx_put_chainbuf(ln);
+                    b = cl->buf;
 
-done:
-            ngx_log_debug7(NGX_LOG_DEBUG_CORE, hcr->connection->log, 0,
-                    "http client, parse done %p %p-%p %p, rc: %d, %O %O",
-                    cl->buf->start, cl->buf->pos, cl->buf->last, cl->buf->end,
-                    rc, ctx->chunked.size, ctx->chunked.length);
+                    if (cl == NULL) {
+                        return NGX_AGAIN;
+                    }
+                }
 
-            if (cl->buf->pos == cl->buf->last) {
-                l = cl;
-                cl = cl->next;
-                ngx_put_chainbuf(l);
-
-                if (cl == NULL) {
-                    return n;
+                if (ctx->chunked.size == 0) { // current chunk read over
+                    break;
                 }
             }
+
+            ngx_log_debug7(NGX_LOG_DEBUG_CORE, r->connection->log, 0,
+                    "http client, parse done %p %p-%p %p, rc: %d, %O %O",
+                    b->start, b->pos, b->last, b->end,
+                    rc, ctx->chunked.size, ctx->chunked.length);
 
             continue;
         }
 
         if (rc == NGX_AGAIN) {
-            l = cl;
+            ln = cl;
             cl = cl->next;
-            ngx_put_chainbuf(l);
+            ngx_put_chainbuf(ln);
 
             if (cl == NULL) {
                 return NGX_AGAIN;
             }
+
             continue;
         }
 
         if (rc == NGX_DONE) {
-            /* a whole response has been parsed successfully */
+            if (b->pos != b->last || cl->next) {
+                ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                        "http client, read unexpected chunked data");
+            }
+            ngx_put_chainbufs(cl);
+
             return NGX_DONE;
         }
 
-        ngx_log_error(NGX_LOG_ERR, hcr->connection->log, 0,
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                 "http client, invalid chunked response");
 
         return NGX_ERROR;
@@ -1702,10 +1682,114 @@ ngx_http_client_header_in(ngx_http_request_t *r, ngx_str_t *key)
 
 
 ngx_int_t
-ngx_http_client_read_body(ngx_http_request_t *r, ngx_chain_t **in,
-        size_t size)
+ngx_http_client_read_body(ngx_http_request_t *r, ngx_chain_t **in)
 {
-    return ngx_http_client_body_chunked_filter(r, in, size);
+    ngx_client_session_t       *s;
+    ngx_http_client_ctx_t      *ctx;
+    ngx_http_client_conf_t     *hccf;
+    ngx_buf_t                  *buf;
+    ngx_int_t                   n, rc;
+    ngx_event_t                *rev;
+    ngx_chain_t                *cl, **ll, *ln;
+
+    ctx = r->ctx[0];
+    s = ctx->session;
+    rev = r->connection->read;
+    hccf = (ngx_http_client_conf_t *) ngx_get_conf(ngx_cycle->conf_ctx,
+                                                   ngx_http_client_module);
+
+    // recycle bufs
+    while (ctx->in) {
+        cl = ctx->in;
+        ctx->in = cl->next;
+        if (cl->buf->pos != cl->buf->last) {
+            break;
+        }
+
+        ngx_put_chainbuf(cl);
+    }
+
+    cl = NULL;
+    ll = &cl;
+
+    // part of body will read with header
+    if (ctx->buffer->last != ctx->buffer->pos) {
+        ln = ngx_get_chainbuf(hccf->body_buffer_size, 0);
+        if (ln == NULL) {
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                    "http client, alloc chainbuf without buffer failed");
+            return NGX_ERROR;
+        }
+        buf = ln->buf;
+        buf->pos = ctx->buffer->pos;
+        buf->last = ctx->buffer->last;
+        ctx->buffer->pos = ctx->buffer->last;
+
+        *ll = ln;
+        ll = &(*ll)->next;
+    }
+
+    // start read
+    while (1) {
+        ln = ngx_get_chainbuf(hccf->body_buffer_size, 1);
+        if (ln == NULL) {
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                    "http client, alloc chainbuf with buffer failed");
+            return NGX_ERROR;
+        }
+        buf = ln->buf;
+
+        n = ngx_client_read(s, buf);
+
+        if (n == 0) {
+            ngx_put_chainbufs(cl);
+
+            ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                    "http client, server close");
+            return 0;
+        }
+
+        if (n == NGX_ERROR) {
+            ngx_put_chainbufs(cl);
+
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, ngx_errno,
+                    "http client, server error close");
+            return NGX_ERROR;
+        }
+
+        if (n == NGX_AGAIN) { // all data in socket has been read
+            ngx_put_chainbuf(ln);
+
+            if (ngx_handle_read_event(rev, 0) != NGX_OK) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, ngx_errno,
+                        "http client, handle read event error");
+                return NGX_ERROR;
+            }
+
+            break;
+        }
+
+        *ll = ln;
+        ll = &(*ll)->next;
+        ctx->rbytes += n;
+    }
+
+    if (ctx->headers_in.chunked) {
+        rc = ngx_http_client_body_chunked(r, cl);
+    } else {
+        rc = ngx_http_client_body_length(r, cl);
+    }
+
+    if (rc == NGX_ERROR) { // parse chunked error
+        return NGX_ERROR;
+    }
+
+    *in = ctx->in;
+    if (rc == NGX_DONE) { // all body has been read
+        return NGX_DONE;
+    }
+
+    return NGX_AGAIN;
 }
 
 
@@ -1738,9 +1822,15 @@ ngx_http_client_detach(ngx_http_request_t *r)
 {
     ngx_http_client_ctx_t      *ctx;
 
+    if (r == NULL) {
+        return;
+    }
+
     ctx = r->ctx[0];
 
     ctx->request = NULL;
+
+    ngx_http_client_discarded_body(r);
 }
 
 
