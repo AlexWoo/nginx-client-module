@@ -572,6 +572,7 @@ ngx_http_client_discarded_body(ngx_http_request_t *r)
     // if detach, all http response receive, set keepalive
     if (rc == NGX_DONE) {
         ngx_http_client_finalize_request(r, 0);
+        return;
     }
 
     // NGX_AGAIN
@@ -1830,7 +1831,7 @@ ngx_http_client_detach(ngx_http_request_t *r)
 
     ctx->request = NULL;
 
-    ngx_http_client_discarded_body(r);
+    ngx_post_event(r->connection->read, &ngx_posted_events);
 }
 
 
