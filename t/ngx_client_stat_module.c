@@ -98,7 +98,7 @@ ngx_client_stat_handler(ngx_http_request_t *r)
     if (*ll) {
         ll = &(*ll)->next;
     }
-    *ll = ngx_rbuf_state(r);
+    *ll = ngx_rbuf_state(r, 1);
 
     if (*ll) {
         ll = &(*ll)->next;

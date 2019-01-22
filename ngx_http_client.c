@@ -1744,6 +1744,7 @@ ngx_http_client_read_body(ngx_http_request_t *r, ngx_chain_t **in)
         n = ngx_client_read(s, buf);
 
         if (n == 0) {
+            ngx_put_chainbuf(ln);
             ngx_put_chainbufs(cl);
 
             ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
@@ -1752,6 +1753,7 @@ ngx_http_client_read_body(ngx_http_request_t *r, ngx_chain_t **in)
         }
 
         if (n == NGX_ERROR) {
+            ngx_put_chainbuf(ln);
             ngx_put_chainbufs(cl);
 
             ngx_log_error(NGX_LOG_ERR, r->connection->log, ngx_errno,
