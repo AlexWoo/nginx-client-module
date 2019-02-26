@@ -1045,15 +1045,13 @@ ngx_http_client_create_request_buf(ngx_client_session_t *s)
     ++len; /* "/" */
     if (ctx->url.path.len) {
         /* "path" */
-        len += ctx->url.path.len + 2 * ngx_escape_uri(NULL, ctx->url.path.data,
-               ctx->url.path.len, NGX_ESCAPE_URI);
+        len += ctx->url.path.len;
     }
 
     if (ctx->url.args.len) {
         /* "?args" */
         ++len;
-        len += ctx->url.args.len + 2 * ngx_escape_uri(NULL, ctx->url.args.data,
-               ctx->url.args.len, NGX_ESCAPE_URI);
+        len += ctx->url.args.len;
     }
     ++len; /* " " */
 
@@ -1088,14 +1086,12 @@ ngx_http_client_create_request_buf(ngx_client_session_t *s)
     /* path + args */
     *b->last++ = '/';
     if (ctx->url.path.len) {
-        b->last = (u_char *) ngx_escape_uri(b->last, ctx->url.path.data,
-                             ctx->url.path.len, NGX_ESCAPE_URI);
+        b->last = ngx_cpymem(b->last, ctx->url.path.data, ctx->url.path.len);
     }
 
     if (ctx->url.args.len) {
         *b->last++ = '?';
-        b->last = (u_char *) ngx_escape_uri(b->last, ctx->url.args.data,
-                             ctx->url.args.len, NGX_ESCAPE_URI);
+        b->last = ngx_cpymem(b->last, ctx->url.args.data, ctx->url.args.len);
     }
     *b->last++ = ' ';
 
