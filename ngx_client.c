@@ -378,6 +378,8 @@ ngx_client_reusable_connection(ngx_client_session_t *s)
         return;
     }
 
+    ngx_log_error(NGX_LOG_INFO, &s->log, 0, "client, put connection in pool");
+
     c->pool = NULL;
 
     // get client connection pool for c->sockaddr
@@ -720,6 +722,10 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
         ngx_log_error(NGX_LOG_ERR, &s->log, ngx_errno,
                 "nginx client connect peer failed");
         goto failed;
+    }
+
+    if (rc == NGX_DONE) {
+        ngx_log_error(NGX_LOG_INFO, &s->log, 0, "client, reuse connection");
     }
 
     // NGX_AGAIN: send syn, wait for syn,ack
@@ -1249,19 +1255,14 @@ ngx_client_set_keepalive(ngx_client_session_t *s)
 }
 
 
-void
-ngx_client_close(ngx_client_session_t *s)
+static void
+ngx_client_close_handler(ngx_event_t *ev)
 {
-    ngx_client_closed_pt        closed;
+    ngx_client_session_t       *s;
     ngx_pool_t                 *pool;
+    ngx_client_closed_pt        closed;
 
-    if (s->closed) {
-        return;
-    }
-
-    s->log.action = "close";
-
-    s->closed = 1;
+    s = ev->data;
 
     ngx_log_debug0(NGX_LOG_DEBUG_CORE, &s->log, 0, "nginx client close");
 
@@ -1276,6 +1277,28 @@ ngx_client_close(ngx_client_session_t *s)
 
     pool = s->pool;
     NGX_DESTROY_POOL(pool); /* s alloc from pool */
+}
+
+
+void
+ngx_client_close(ngx_client_session_t *s)
+{
+    ngx_event_t                *e;
+
+    if (s->closed) {
+        return;
+    }
+
+    s->log.action = "close";
+
+    s->closed = 1;
+
+    e = &s->close;
+    e->data = s;
+    e->handler = ngx_client_close_handler;
+    e->log = &s->log;
+
+    ngx_post_event(e, &ngx_posted_events);
 }
 
 

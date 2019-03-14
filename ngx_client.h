@@ -62,6 +62,8 @@ struct ngx_client_session_s {
     unsigned                    connected:1; /* client connected to server */
     unsigned                    closed:1;    /* client has been closed */
 
+    ngx_event_t                 close;       /* for async close */
+
     /* callback */
 
     ngx_client_connect_pt       client_connected; /* connect successd */
