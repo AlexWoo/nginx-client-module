@@ -70,6 +70,12 @@ ngx_http_request_t *ngx_http_client_create(ngx_log_t *log,
     ngx_http_client_handler_pt send_body, void *request);
 
 /*
+ * add cleanup as ngx_http_cleanup_add
+ */
+ngx_http_cleanup_t *ngx_http_client_cleanup_add(ngx_http_request_t *r,
+    size_t size);
+
+/*
  * set read handler for http client, should set before send request,
  *  otherwise body from server will discard
  *

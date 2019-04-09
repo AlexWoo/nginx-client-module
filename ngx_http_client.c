@@ -1439,6 +1439,37 @@ destroy:
 }
 
 
+ngx_http_cleanup_t *
+ngx_http_client_cleanup_add(ngx_http_request_t *r, size_t size)
+{
+    ngx_http_cleanup_t  *cln;
+
+    r = r->main;
+
+    cln = ngx_palloc(r->pool, sizeof(ngx_http_cleanup_t));
+    if (cln == NULL) {
+        return NULL;
+    }
+
+    if (size) {
+        cln->data = ngx_palloc(r->pool, size);
+        if (cln->data == NULL) {
+            return NULL;
+        }
+
+    } else {
+        cln->data = NULL;
+    }
+
+    cln->handler = NULL;
+    cln->next = r->cleanup;
+
+    r->cleanup = cln;
+
+    return cln;
+}
+
+
 void
 ngx_http_client_set_read_handler(ngx_http_request_t *r,
     ngx_http_client_handler_pt read_handler)
@@ -1553,7 +1584,6 @@ ngx_http_client_send(ngx_http_request_t *r)
     ctx->headers_in.content_length_n = -1;
 
     ngx_client_connect(s);
-    r->connection = s->connection;
 
     return NGX_OK;
 }
@@ -1834,7 +1864,9 @@ ngx_http_client_detach(ngx_http_request_t *r)
 
     ctx->request = NULL;
 
-    ngx_post_event(r->connection->read, &ngx_posted_events);
+    if (r->connection) {
+        ngx_post_event(r->connection->read, &ngx_posted_events);
+    }
 }
 
 
