@@ -7,6 +7,7 @@
 #include "ngx_rbuf.h"
 #include "ngx_poold.h"
 #include "ngx_map.h"
+#include "ngx_timerd.h"
 
 
 static void *ngx_http_client_module_create_conf(ngx_cycle_t *cycle);
@@ -742,7 +743,8 @@ ngx_http_client_process_header(ngx_client_session_t *s)
 
             if (n == NGX_AGAIN) {
                 if (!rev->timer_set) {
-                    ngx_add_timer(rev, ctx->header_timeout);
+                    NGX_ADD_TIMER(rev, ctx->header_timeout,
+                                  offsetof(ngx_connection_t, number));
                 }
 
                 if (ngx_handle_read_event(rev, 0) != NGX_OK) {
@@ -769,7 +771,7 @@ ngx_http_client_process_header(ngx_client_session_t *s)
     s->client_recv = ngx_http_client_read_handler;
 
     if (rev->timer_set) {
-        ngx_del_timer(rev);
+        NGX_DEL_TIMER(rev, r->connection->number);
     }
 
     return ngx_http_client_read_handler(s);
@@ -812,7 +814,8 @@ ngx_http_client_process_status_line(ngx_client_session_t *s)
 
             if (n == NGX_AGAIN) {
                 if (!rev->timer_set) {
-                    ngx_add_timer(rev, ctx->header_timeout);
+                    NGX_ADD_TIMER(rev, ctx->header_timeout,
+                                  offsetof(ngx_connection_t, number));
                 }
 
                 if (ngx_handle_read_event(rev, 0) != NGX_OK) {
@@ -917,7 +920,8 @@ ngx_http_client_wait_response_handler(ngx_client_session_t *s)
 
     if (n == NGX_AGAIN) {
         if (!rev->timer_set) {
-            ngx_add_timer(rev, ctx->header_timeout);
+            NGX_ADD_TIMER(rev, ctx->header_timeout,
+                          offsetof(ngx_connection_t, number));
         }
 
         if (ngx_handle_read_event(rev, 0) != NGX_OK) {
@@ -1158,7 +1162,7 @@ ngx_http_client_send_header(ngx_client_session_t *s)
         ctx->write_handler(ctx->request, r);
     }
 
-    ngx_add_timer(rev, ctx->header_timeout);
+    NGX_ADD_TIMER(rev, ctx->header_timeout, offsetof(ngx_connection_t, number));
 
     return;
 

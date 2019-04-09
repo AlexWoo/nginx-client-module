@@ -9,6 +9,7 @@
 #include "ngx_dynamic_resolver.h"
 #include "ngx_poold.h"
 #include "ngx_map.h"
+#include "ngx_timerd.h"
 
 
 #define NGX_CLIENT_DISCARD_BUFFER_SIZE  4096
@@ -274,7 +275,7 @@ ngx_client_get_connection(struct sockaddr *sockaddr, socklen_t socklen)
 
     // init connection
     if (c->read->timer_set) {
-        ngx_del_timer(c->read);
+        NGX_DEL_TIMER(c->read, c->number);
     }
 
     if (c->read->posted) {
@@ -312,14 +313,6 @@ ngx_client_keepalive_handler(ngx_event_t *rev)
 
         n = c->recv(c, b.last, b.end - b.last);
 
-        if (n == NGX_AGAIN) {
-            if (ngx_handle_read_event(rev, 0) != NGX_OK) {
-                goto close;
-            }
-
-            return;
-        }
-
         if (n == 0 || n == NGX_ERROR) {
             ngx_log_error(NGX_LOG_INFO, c->log, ngx_errno,
                     "server close while client keepalive");
@@ -327,7 +320,7 @@ ngx_client_keepalive_handler(ngx_event_t *rev)
         }
 
         ngx_log_error(NGX_LOG_INFO, c->log, 0,
-                "server send data while client keepalive");
+                "server recv data while client keepalive");
     }
 
 close:
@@ -345,6 +338,14 @@ close:
     if (ngx_queue_empty(&pool->cs_queue)) {
         ngx_map_delete(&ccf->client_pools, (intptr_t) &pool->paddr);
         ngx_client_put_client_pool(pool);
+    }
+
+    if (c->read->timer_set) {
+        NGX_DEL_TIMER(c->read, c->number);
+    }
+
+    if (c->write->timer_set) {
+        NGX_DEL_TIMER(c->write, c->number);
     }
 
     ngx_close_connection(c);
@@ -416,10 +417,10 @@ ngx_client_reusable_connection(ngx_client_session_t *s)
 
     // set timer for keepalive time
     c->read->handler = ngx_client_keepalive_handler;
-    ngx_add_timer(c->read, ccf->keepalive);
+    NGX_ADD_TIMER(c->read, ccf->keepalive, offsetof(ngx_connection_t, number));
 
     if (c->write->timer_set) {
-        ngx_del_timer(c->write);
+        NGX_DEL_TIMER(c->write, c->number);
     }
 
     if (c->write->posted) {
@@ -428,6 +429,10 @@ ngx_client_reusable_connection(ngx_client_session_t *s)
 
     if (c->write->active && (ngx_event_flags & NGX_USE_LEVEL_EVENT)) {
         if (ngx_del_event(c->write, NGX_WRITE_EVENT, 0) != NGX_OK) {
+            if (c->read->timer_set) {
+                NGX_DEL_TIMER(c->read, c->number);
+            }
+
             ngx_close_connection(c);
             return;
         }
@@ -578,7 +583,7 @@ ngx_client_connected(ngx_client_session_t *s)
     }
 
     if (wev->timer_set) {
-        ngx_del_timer(wev);
+        NGX_DEL_TIMER(wev, s->connection->number);
     }
 
     s->connected = 1;
@@ -779,7 +784,8 @@ ngx_client_connect_server(void *data, struct sockaddr *sa, socklen_t socklen)
     c->read->handler = ngx_client_read_handler;
 
     if (rc == NGX_AGAIN) {
-        ngx_add_timer(c->write, s->connect_timeout);
+        NGX_ADD_TIMER(c->write, s->connect_timeout,
+                      offsetof(ngx_connection_t, number));
         return;
     }
 
@@ -833,6 +839,14 @@ ngx_client_close_connection(ngx_client_session_t *s)
     s->connected = 0;
     s->connection = NULL;
     c->destroyed = 1;
+
+    if (c->write->timer_set) {
+        NGX_DEL_TIMER(c->write, c->number);
+    }
+
+    if (c->read->timer_set) {
+        NGX_DEL_TIMER(c->read, c->number);
+    }
 
     ngx_close_connection(c);
 }
@@ -1175,7 +1189,8 @@ ngx_client_write(ngx_client_session_t *s, ngx_chain_t *out)
     s->out = chain;
 
     if (chain) {
-        ngx_add_timer(c->write, s->send_timeout);
+        NGX_ADD_TIMER(c->write, s->send_timeout,
+                      offsetof(ngx_connection_t, number));
         if (ngx_handle_write_event(c->write, 0) != NGX_OK) {
             return NGX_ERROR;
         }

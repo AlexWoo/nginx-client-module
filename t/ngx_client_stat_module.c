@@ -10,6 +10,7 @@
 #include "ngx_client.h"
 #include "ngx_rbuf.h"
 #include "ngx_poold.h"
+#include "ngx_timerd.h"
 #include "ngx_event_timer_module.h"
 #include "ngx_event_resolver.h"
 #include "ngx_dynamic_resolver.h"
@@ -119,6 +120,11 @@ ngx_client_stat_handler(ngx_http_request_t *r)
         ll = &(*ll)->next;
     }
     *ll = ngx_poold_state(r, 1);
+
+    if (*ll) {
+        ll = &(*ll)->next;
+    }
+    *ll = ngx_timerd_state(r, 1);
 
     if (*ll) {
         ll = &(*ll)->next;
