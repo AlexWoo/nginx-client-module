@@ -320,7 +320,9 @@ ngx_client_keepalive_handler(ngx_event_t *rev)
         }
 
         ngx_log_error(NGX_LOG_INFO, c->log, 0,
-                "server recv data while client keepalive");
+                "server recv data while client keepalive %d", n);
+
+        goto close;
     }
 
 close:
